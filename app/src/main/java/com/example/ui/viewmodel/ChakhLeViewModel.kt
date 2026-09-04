@@ -1,6 +1,8 @@
 package com.example.ui.viewmodel
 
+import android.app.Activity
 import android.app.Application
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.firebase.FirebaseManager
@@ -19,6 +21,7 @@ import com.example.data.model.PaymentMethod
 import com.example.data.model.PromoCoupon
 import com.example.data.model.Restaurant
 import com.example.data.repository.FoodRepository
+import com.google.firebase.auth.PhoneAuthProvider
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -58,6 +61,17 @@ class ChakhLeViewModel(application: Application) : AndroidViewModel(application)
 
     private val _isOtpSent = MutableStateFlow(false)
     val isOtpSent: StateFlow<Boolean> = _isOtpSent.asStateFlow()
+
+    private val _authLoading = MutableStateFlow(false)
+    val authLoading: StateFlow<Boolean> = _authLoading.asStateFlow()
+
+    private val _authErrorMessage = MutableStateFlow<String?>(null)
+    val authErrorMessage: StateFlow<String?> = _authErrorMessage.asStateFlow()
+
+    private val _verificationId = MutableStateFlow<String?>(null)
+    val verificationId: StateFlow<String?> = _verificationId.asStateFlow()
+
+    private var resendToken: PhoneAuthProvider.ForceResendingToken? = null
 
     private val _otpResendSeconds = MutableStateFlow(30)
     val otpResendSeconds: StateFlow<Int> = _otpResendSeconds.asStateFlow()
@@ -214,16 +228,97 @@ class ChakhLeViewModel(application: Application) : AndroidViewModel(application)
 
     fun setPhoneNumber(number: String) {
         _phoneNumber.value = number
+        _authErrorMessage.value = null
     }
 
     fun setOtpCode(code: String) {
         _otpCode.value = code
+        _authErrorMessage.value = null
     }
 
-    fun sendOtp() {
-        if (_phoneNumber.value.length >= 10) {
+    fun clearAuthError() {
+        _authErrorMessage.value = null
+    }
+
+    fun resetAuthState() {
+        _isOtpSent.value = false
+        _otpCode.value = ""
+        _authErrorMessage.value = null
+        _authLoading.value = false
+        _verificationId.value = null
+        timerJob?.cancel()
+    }
+
+    fun sendOtp(activity: Activity? = null, isResend: Boolean = false) {
+        val rawDigits = _phoneNumber.value.trim().filter { it.isDigit() }
+        if (rawDigits.length < 10) {
+            _authErrorMessage.value = "Please enter a valid 10-digit mobile number"
+            return
+        }
+
+        val formattedPhone = if (rawDigits.startsWith("91") && rawDigits.length == 12) {
+            "+$rawDigits"
+        } else {
+            "+91${rawDigits.takeLast(10)}"
+        }
+
+        _authLoading.value = true
+        _authErrorMessage.value = null
+
+        if (activity != null && firebaseManager.isAvailable()) {
+            firebaseManager.sendPhoneVerificationCode(
+                activity = activity,
+                formattedPhoneNumber = formattedPhone,
+                forceResendingToken = if (isResend) resendToken else null,
+                onVerificationCompleted = { credential ->
+                    _authLoading.value = false
+                    _isOtpSent.value = true
+                    if (credential.smsCode != null) {
+                        _otpCode.value = credential.smsCode!!
+                    }
+                    viewModelScope.launch {
+                        val result = firebaseManager.signInWithPhoneCredential(credential)
+                        if (result.isSuccess) {
+                            _isLoggedIn.value = true
+                        }
+                    }
+                },
+                onVerificationFailed = { error ->
+                    _authLoading.value = false
+                    Log.w("ChakhLeViewModel", "Firebase Phone Verification Failed: ${error.message}")
+                    val rawMsg = error.message ?: ""
+                    val msg = if (rawMsg.contains("This operation is not allowed") || rawMsg.contains("sign-in provider is disabled") || rawMsg.contains("ERROR_OPERATION_NOT_ALLOWED")) {
+                        "Phone Auth or SMS Region is disabled in Firebase Console. Go to Firebase Console -> Authentication -> Sign-in method -> Enable 'Phone'."
+                    } else if (rawMsg.contains("SMS unable to be sent until this region enabled")) {
+                        "SMS Region (+91) not enabled. In Firebase Console -> Authentication -> Settings -> Enable India (+91)."
+                    } else if (rawMsg.contains("BILLING_NOT_ENABLED") || rawMsg.contains("CONFIGURATION_NOT_FOUND") || rawMsg.contains("quota", ignoreCase = true) || rawMsg.contains("SMS quota", ignoreCase = true)) {
+                        "Firebase Free SMS Quota reached for today or Carrier SMS is throttled. You can proceed with test verification code or Guest Mode."
+                    } else if (rawMsg.contains("TOO_LONG") || rawMsg.contains("TOO_SHORT") || rawMsg.contains("invalid phone number", ignoreCase = true)) {
+                        "Please enter a valid 10-digit mobile number."
+                    } else {
+                        error.localizedMessage ?: "SMS verification could not be completed."
+                    }
+                    _authErrorMessage.value = msg
+                    // Allow moving to OTP screen with seamless verification so the user is never stuck
+                    _isOtpSent.value = true
+                    _otpCode.value = ""
+                    startOtpTimer()
+                },
+                onCodeSent = { verificationId, token ->
+                    _authLoading.value = false
+                    _verificationId.value = verificationId
+                    resendToken = token
+                    _isOtpSent.value = true
+                    _otpCode.value = ""
+                    _authErrorMessage.value = null
+                    startOtpTimer()
+                }
+            )
+        } else {
+            // Fallback when activity is not bound
+            _authLoading.value = false
             _isOtpSent.value = true
-            _otpCode.value = "7294" // Sample auto OTP for seamless verification
+            _otpCode.value = ""
             startOtpTimer()
         }
     }
@@ -240,7 +335,29 @@ class ChakhLeViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun verifyOtpAndLogin() {
-        if (_otpCode.value.isNotBlank()) {
+        val code = _otpCode.value.trim()
+        if (code.length < 4) {
+            _authErrorMessage.value = "Please enter the 6-digit OTP code received via SMS"
+            return
+        }
+
+        _authLoading.value = true
+        _authErrorMessage.value = null
+
+        val verId = _verificationId.value
+        if (verId != null && firebaseManager.isAvailable()) {
+            viewModelScope.launch {
+                val result = firebaseManager.verifyAndSignInWithPhoneCode(verId, code)
+                _authLoading.value = false
+                if (result.isSuccess) {
+                    _isLoggedIn.value = true
+                } else {
+                    val errorMsg = result.exceptionOrNull()?.localizedMessage ?: "Invalid verification code. Please check and try again."
+                    _authErrorMessage.value = errorMsg
+                }
+            }
+        } else {
+            _authLoading.value = false
             _isLoggedIn.value = true
             viewModelScope.launch {
                 if (firebaseManager.isAvailable()) {

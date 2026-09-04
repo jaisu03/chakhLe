@@ -1,6 +1,9 @@
 package com.example.ui.screens
 
+import android.app.Activity
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -21,7 +24,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Phone
@@ -46,6 +50,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -72,10 +77,15 @@ fun AuthScreen(
     viewModel: ChakhLeViewModel,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
+    val activity = context as? Activity
+
     val phoneNumber by viewModel.phoneNumber.collectAsState()
     val otpCode by viewModel.otpCode.collectAsState()
     val isOtpSent by viewModel.isOtpSent.collectAsState()
     val otpTimer by viewModel.otpResendSeconds.collectAsState()
+    val authLoading by viewModel.authLoading.collectAsState()
+    val authErrorMessage by viewModel.authErrorMessage.collectAsState()
     val currentAddress by viewModel.currentAddressTitle.collectAsState()
     val isGpsDetecting by viewModel.isGpsDetecting.collectAsState()
 
@@ -94,7 +104,7 @@ fun AuthScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier.fillMaxWidth()
         ) {
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(20.dp))
 
             // App Emblem
             Box(
@@ -128,7 +138,44 @@ fun AuthScreen(
                 fontWeight = FontWeight.SemiBold
             )
 
-            Spacer(modifier = Modifier.height(28.dp))
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // Error banner if any
+            AnimatedVisibility(
+                visible = authErrorMessage != null,
+                enter = fadeIn(),
+                exit = fadeOut()
+            ) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 14.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFFDE8E8))
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ErrorOutline,
+                            contentDescription = "Error",
+                            tint = Color(0xFFE02424),
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = authErrorMessage ?: "",
+                            fontSize = 12.sp,
+                            color = Color(0xFF9B1C1C),
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+            }
 
             // Main Auth Card
             Card(
@@ -143,23 +190,20 @@ fun AuthScreen(
                         .padding(20.dp)
                 ) {
                     Text(
-                        text = if (!isOtpSent) "Enter Mobile Number" else "Verify 4-Digit OTP",
+                        text = if (!isOtpSent) "Enter Mobile Number" else "Verify SMS OTP",
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Bold,
                         color = ChakhLeTextPrimary
                     )
 
-                    Text(
-                        text = if (!isOtpSent)
-                            "We will send a 4-digit verification code"
-                        else
-                            "OTP sent to +91 ${phoneNumber.ifBlank { "98765 12345" }}",
-                        fontSize = 12.sp,
-                        color = ChakhLeTextSecondary,
-                        modifier = Modifier.padding(top = 4.dp, bottom = 16.dp)
-                    )
-
                     if (!isOtpSent) {
+                        Text(
+                            text = "We will send a 6-digit verification code via SMS",
+                            fontSize = 12.sp,
+                            color = ChakhLeTextSecondary,
+                            modifier = Modifier.padding(top = 4.dp, bottom = 16.dp)
+                        )
+
                         // Phone input
                         OutlinedTextField(
                             value = phoneNumber,
@@ -200,22 +244,69 @@ fun AuthScreen(
                         Spacer(modifier = Modifier.height(16.dp))
 
                         Button(
-                            onClick = { viewModel.sendOtp() },
+                            onClick = { viewModel.sendOtp(activity) },
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(48.dp)
                                 .testTag("send_otp_button"),
                             shape = RoundedCornerShape(12.dp),
                             colors = ButtonDefaults.buttonColors(containerColor = ChakhLeRedPrimary),
-                            enabled = phoneNumber.length == 10
+                            enabled = phoneNumber.length == 10 && !authLoading
                         ) {
-                            Text(
-                                text = "Get Verification OTP",
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.Bold
-                            )
+                            if (authLoading) {
+                                CircularProgressIndicator(
+                                    color = Color.White,
+                                    strokeWidth = 2.dp,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Sending SMS...", fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                            } else {
+                                Text(
+                                    text = "Get Verification OTP",
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
                         }
                     } else {
+                        // OTP sent view
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 4.dp, bottom = 16.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = "OTP sent to +91 ${phoneNumber.ifBlank { "98765 12345" }}",
+                                fontSize = 12.sp,
+                                color = ChakhLeTextSecondary
+                            )
+
+                            Row(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .clickable { viewModel.resetAuthState() }
+                                    .padding(4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Edit,
+                                    contentDescription = "Change Number",
+                                    tint = ChakhLeRedPrimary,
+                                    modifier = Modifier.size(12.dp)
+                                )
+                                Spacer(modifier = Modifier.width(3.dp))
+                                Text(
+                                    text = "Change",
+                                    fontSize = 11.sp,
+                                    color = ChakhLeRedPrimary,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+
                         // OTP Input
                         OutlinedTextField(
                             value = otpCode,
@@ -223,7 +314,7 @@ fun AuthScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .testTag("otp_input_field"),
-                            placeholder = { Text("Enter 4-digit code") },
+                            placeholder = { Text("Enter 6-digit SMS code") },
                             leadingIcon = {
                                 Icon(
                                     imageVector = Icons.Default.Lock,
@@ -244,34 +335,9 @@ fun AuthScreen(
 
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
+                            horizontalArrangement = Arrangement.End,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Surface(
-                                color = ChakhLeAmberLight,
-                                shape = RoundedCornerShape(6.dp),
-                                modifier = Modifier.clickable { viewModel.setOtpCode("7294") }
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.CheckCircle,
-                                        contentDescription = null,
-                                        tint = ChakhLeAmberDark,
-                                        modifier = Modifier.size(14.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text(
-                                        text = "Auto-fill SMS: 7294",
-                                        color = ChakhLeAmberDark,
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                }
-                            }
-
                             if (otpTimer > 0) {
                                 Text(
                                     text = "Resend SMS in ${otpTimer}s",
@@ -279,8 +345,11 @@ fun AuthScreen(
                                     color = ChakhLeTextMuted
                                 )
                             } else {
-                                TextButton(onClick = { viewModel.sendOtp() }) {
-                                    Text("Resend OTP", color = ChakhLeRedPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                TextButton(
+                                    onClick = { viewModel.sendOtp(activity, isResend = true) },
+                                    enabled = !authLoading
+                                ) {
+                                    Text("Resend SMS OTP", color = ChakhLeRedPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                                 }
                             }
                         }
@@ -295,13 +364,23 @@ fun AuthScreen(
                                 .testTag("verify_otp_button"),
                             shape = RoundedCornerShape(12.dp),
                             colors = ButtonDefaults.buttonColors(containerColor = ChakhLeRedPrimary),
-                            enabled = otpCode.length >= 4
+                            enabled = otpCode.length >= 4 && !authLoading
                         ) {
-                            Text(
-                                text = "Verify & Proceed to Food",
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.Bold
-                            )
+                            if (authLoading) {
+                                CircularProgressIndicator(
+                                    color = Color.White,
+                                    strokeWidth = 2.dp,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Verifying...", fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                            } else {
+                                Text(
+                                    text = "Verify & Proceed to Food",
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
                         }
                     }
                 }

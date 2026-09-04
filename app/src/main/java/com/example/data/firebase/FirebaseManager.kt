@@ -1,5 +1,6 @@
 package com.example.data.firebase
 
+import android.app.Activity
 import android.content.Context
 import android.util.Log
 import com.example.data.model.AddressEntity
@@ -9,8 +10,12 @@ import com.example.data.model.OrderEntity
 import com.example.data.model.OrderStatus
 import com.example.data.model.Restaurant
 import com.google.firebase.FirebaseApp
+import com.google.firebase.FirebaseException
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
+import com.google.firebase.auth.PhoneAuthCredential
+import com.google.firebase.auth.PhoneAuthOptions
+import com.google.firebase.auth.PhoneAuthProvider
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.SetOptions
@@ -21,6 +26,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.tasks.await
+import java.util.concurrent.TimeUnit
 
 class FirebaseManager private constructor(private val context: Context) {
 
@@ -110,6 +116,81 @@ class FirebaseManager private constructor(private val context: Context) {
     fun signOut() {
         auth?.signOut()
         _currentUser.value = null
+    }
+
+    fun sendPhoneVerificationCode(
+        activity: Activity,
+        formattedPhoneNumber: String,
+        forceResendingToken: PhoneAuthProvider.ForceResendingToken? = null,
+        onVerificationCompleted: (PhoneAuthCredential) -> Unit,
+        onVerificationFailed: (FirebaseException) -> Unit,
+        onCodeSent: (String, PhoneAuthProvider.ForceResendingToken) -> Unit
+    ) {
+        val authInstance = auth
+        if (authInstance == null) {
+            onVerificationFailed(FirebaseException("Firebase Auth is not initialized"))
+            return
+        }
+
+        val callbacks = object : PhoneAuthProvider.OnVerificationStateChangedCallbacks() {
+            override fun onVerificationCompleted(credential: PhoneAuthCredential) {
+                Log.d(TAG, "Phone auto-verification completed: ${credential.smsCode}")
+                onVerificationCompleted(credential)
+            }
+
+            override fun onVerificationFailed(e: FirebaseException) {
+                Log.e(TAG, "Firebase phone verification failed", e)
+                onVerificationFailed(e)
+            }
+
+            override fun onCodeSent(
+                verificationId: String,
+                token: PhoneAuthProvider.ForceResendingToken
+            ) {
+                Log.d(TAG, "Firebase SMS code successfully dispatched. verificationId=$verificationId")
+                onCodeSent(verificationId, token)
+            }
+        }
+
+        val builder = PhoneAuthOptions.newBuilder(authInstance)
+            .setPhoneNumber(formattedPhoneNumber)
+            .setTimeout(60L, TimeUnit.SECONDS)
+            .setActivity(activity)
+            .setCallbacks(callbacks)
+
+        if (forceResendingToken != null) {
+            builder.setForceResendingToken(forceResendingToken)
+        }
+
+        try {
+            PhoneAuthProvider.verifyPhoneNumber(builder.build())
+        } catch (e: Exception) {
+            Log.e(TAG, "Error starting verifyPhoneNumber", e)
+            onVerificationFailed(FirebaseException(e.message ?: "Failed to start phone verification"))
+        }
+    }
+
+    suspend fun signInWithPhoneCredential(credential: PhoneAuthCredential): Result<FirebaseUser?> {
+        val authInstance = auth ?: return Result.failure(Exception("Firebase Auth not initialized"))
+        return try {
+            val authResult = authInstance.signInWithCredential(credential).await()
+            _currentUser.value = authResult.user
+            Log.d(TAG, "Phone authentication successful: ${authResult.user?.uid}")
+            Result.success(authResult.user)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed sign in with credential", e)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun verifyAndSignInWithPhoneCode(verificationId: String, smsCode: String): Result<FirebaseUser?> {
+        return try {
+            val credential = PhoneAuthProvider.getCredential(verificationId, smsCode)
+            signInWithPhoneCredential(credential)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error verifying SMS code", e)
+            Result.failure(e)
+        }
     }
 
     // -------------------------------------------------------------
