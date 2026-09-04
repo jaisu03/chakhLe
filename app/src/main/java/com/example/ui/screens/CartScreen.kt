@@ -381,6 +381,10 @@ fun CartScreen(
                                 placeholder = { Text("Add specific notes for kitchen or rider...", fontSize = 12.sp) },
                                 shape = RoundedCornerShape(10.dp),
                                 colors = OutlinedTextFieldDefaults.colors(
+                                    focusedTextColor = ChakhLeTextPrimary,
+                                    unfocusedTextColor = ChakhLeTextPrimary,
+                                    focusedContainerColor = Color.White,
+                                    unfocusedContainerColor = Color.White,
                                     focusedBorderColor = ChakhLeRedPrimary,
                                     unfocusedBorderColor = ChakhLeBorder
                                 ),
@@ -478,6 +482,10 @@ fun CartScreen(
                                         shape = RoundedCornerShape(10.dp),
                                         singleLine = true,
                                         colors = OutlinedTextFieldDefaults.colors(
+                                            focusedTextColor = ChakhLeTextPrimary,
+                                            unfocusedTextColor = ChakhLeTextPrimary,
+                                            focusedContainerColor = Color.White,
+                                            unfocusedContainerColor = Color.White,
                                             focusedBorderColor = ChakhLeRedPrimary,
                                             unfocusedBorderColor = ChakhLeBorder
                                         )

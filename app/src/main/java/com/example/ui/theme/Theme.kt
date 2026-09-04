@@ -51,8 +51,8 @@ private val LightColorScheme =
 
 @Composable
 fun MyApplicationTheme(
-  darkTheme: Boolean = isSystemInDarkTheme(),
-  dynamicColor: Boolean = false, // Use our signature warm red & amber food delivery styling
+  darkTheme: Boolean = false, // Keep consistent signature warm red & amber food delivery styling
+  dynamicColor: Boolean = false,
   content: @Composable () -> Unit,
 ) {
   val colorScheme =

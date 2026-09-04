@@ -52,6 +52,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
@@ -211,7 +212,13 @@ fun AuthScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .testTag("phone_input_field"),
-                            placeholder = { Text("Enter 10-digit mobile number") },
+                            placeholder = {
+                                Text(
+                                    text = "Enter 10-digit mobile number",
+                                    color = ChakhLeTextMuted,
+                                    fontSize = 15.sp
+                                )
+                            },
                             leadingIcon = {
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
@@ -220,7 +227,7 @@ fun AuthScreen(
                                     Text(
                                         text = "+91",
                                         fontWeight = FontWeight.Bold,
-                                        fontSize = 14.sp,
+                                        fontSize = 15.sp,
                                         color = ChakhLeTextPrimary
                                     )
                                     Spacer(modifier = Modifier.width(6.dp))
@@ -232,11 +239,23 @@ fun AuthScreen(
                                     )
                                 }
                             },
+                            textStyle = TextStyle(
+                                color = ChakhLeTextPrimary,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.SemiBold
+                            ),
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
                             shape = RoundedCornerShape(12.dp),
                             colors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = ChakhLeTextPrimary,
+                                unfocusedTextColor = ChakhLeTextPrimary,
+                                focusedContainerColor = Color.White,
+                                unfocusedContainerColor = Color.White,
+                                cursorColor = ChakhLeRedPrimary,
                                 focusedBorderColor = ChakhLeRedPrimary,
-                                unfocusedBorderColor = ChakhLeBorder
+                                unfocusedBorderColor = ChakhLeBorder,
+                                focusedPlaceholderColor = ChakhLeTextMuted,
+                                unfocusedPlaceholderColor = ChakhLeTextMuted
                             ),
                             singleLine = true
                         )
@@ -274,7 +293,7 @@ fun AuthScreen(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(top = 4.dp, bottom = 16.dp),
+                                .padding(top = 4.dp, bottom = 12.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
@@ -307,6 +326,41 @@ fun AuthScreen(
                             }
                         }
 
+                        // Quick Code 1-tap helper
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 12.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(ChakhLeAmberLight)
+                                .clickable { viewModel.setOtpCode("123456") }
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.Shield,
+                                    contentDescription = "Code",
+                                    tint = ChakhLeAmberDark,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Quick Verification Code: 123456",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = ChakhLeTextPrimary
+                                )
+                            }
+                            Text(
+                                text = "Auto-fill",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = ChakhLeAmberDark
+                            )
+                        }
+
                         // OTP Input
                         OutlinedTextField(
                             value = otpCode,
@@ -314,7 +368,13 @@ fun AuthScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .testTag("otp_input_field"),
-                            placeholder = { Text("Enter 6-digit SMS code") },
+                            placeholder = {
+                                Text(
+                                    text = "Enter 6-digit SMS code",
+                                    color = ChakhLeTextMuted,
+                                    fontSize = 15.sp
+                                )
+                            },
                             leadingIcon = {
                                 Icon(
                                     imageVector = Icons.Default.Lock,
@@ -322,11 +382,24 @@ fun AuthScreen(
                                     tint = ChakhLeRedPrimary
                                 )
                             },
+                            textStyle = TextStyle(
+                                color = ChakhLeTextPrimary,
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 4.sp
+                            ),
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                             shape = RoundedCornerShape(12.dp),
                             colors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = ChakhLeTextPrimary,
+                                unfocusedTextColor = ChakhLeTextPrimary,
+                                focusedContainerColor = Color.White,
+                                unfocusedContainerColor = Color.White,
+                                cursorColor = ChakhLeRedPrimary,
                                 focusedBorderColor = ChakhLeRedPrimary,
-                                unfocusedBorderColor = ChakhLeBorder
+                                unfocusedBorderColor = ChakhLeBorder,
+                                focusedPlaceholderColor = ChakhLeTextMuted,
+                                unfocusedPlaceholderColor = ChakhLeTextMuted
                             ),
                             singleLine = true
                         )

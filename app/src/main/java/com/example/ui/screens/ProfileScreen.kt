@@ -526,6 +526,10 @@ fun ProfileScreen(
                                         shape = RoundedCornerShape(10.dp),
                                         singleLine = true,
                                         colors = OutlinedTextFieldDefaults.colors(
+                                            focusedTextColor = ChakhLeTextPrimary,
+                                            unfocusedTextColor = ChakhLeTextPrimary,
+                                            focusedContainerColor = Color.White,
+                                            unfocusedContainerColor = Color.White,
                                             focusedBorderColor = ChakhLeRedPrimary,
                                             unfocusedBorderColor = ChakhLeBorder
                                         )

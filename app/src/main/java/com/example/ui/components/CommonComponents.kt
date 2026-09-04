@@ -1079,6 +1079,8 @@ fun FilterSearchBar(
             },
             shape = RoundedCornerShape(14.dp),
             colors = OutlinedTextFieldDefaults.colors(
+                focusedTextColor = ChakhLeTextPrimary,
+                unfocusedTextColor = ChakhLeTextPrimary,
                 focusedContainerColor = ChakhLeSlate100,
                 unfocusedContainerColor = ChakhLeSlate100,
                 focusedBorderColor = ChakhLeRedPrimary,
