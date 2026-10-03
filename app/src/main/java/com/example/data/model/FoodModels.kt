@@ -33,7 +33,12 @@ data class Restaurant(
     val distanceKm: Double,
     val isPureVeg: Boolean = false,
     val address: String,
-    val featuredTag: String? = null
+    val featuredTag: String? = null,
+    val isOpen: Boolean = true,
+    val ownerPhone: String = "",
+    val ownerName: String = "",
+    val userId: String = "",
+    val password: String = ""
 )
 
 data class Dish(
@@ -134,8 +139,37 @@ data class PromoCoupon(
     val maxDiscount: Double,
     val minOrder: Double,
     val title: String,
-    val description: String
-)
+    val description: String,
+    val maxUses: Int? = null, // e.g. 20 for first 20 people only, null for unlimited
+    val usedCount: Int = 0, // current number of successful redemptions
+    val expiryTimestamp: Long? = null, // epoch millis for time-limited auto-expiry
+    val createdAt: Long = System.currentTimeMillis()
+) {
+    val isTimeExpired: Boolean
+        get() = expiryTimestamp != null && System.currentTimeMillis() > expiryTimestamp
+
+    val isQuotaExhausted: Boolean
+        get() = maxUses != null && usedCount >= maxUses
+
+    val isExpired: Boolean
+        get() = isTimeExpired || isQuotaExhausted
+
+    val remainingUses: Int?
+        get() = maxUses?.let { (it - usedCount).coerceAtLeast(0) }
+
+    fun getTimeRemainingString(): String? {
+        val expiry = expiryTimestamp ?: return null
+        val diff = expiry - System.currentTimeMillis()
+        if (diff <= 0) return "Expired"
+        val hours = diff / (1000 * 60 * 60)
+        val minutes = (diff / (1000 * 60)) % 60
+        return when {
+            hours > 24 -> "${hours / 24}d ${hours % 24}h left"
+            hours > 0 -> "${hours}h ${minutes}m left"
+            else -> "${minutes}m left"
+        }
+    }
+}
 
 data class NotificationItem(
     val id: String,
@@ -158,3 +192,9 @@ data class FaqItem(
     val question: String,
     val answer: String
 )
+
+enum class UserRole(val displayName: String, val badge: String) {
+    CUSTOMER("Customer (Foodie)", "Customer"),
+    KITCHEN("Kitchen Partner", "Kitchen"),
+    ADMIN("Super Admin", "Admin")
+}

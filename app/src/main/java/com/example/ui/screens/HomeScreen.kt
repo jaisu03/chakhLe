@@ -102,8 +102,8 @@ import com.example.ui.viewmodel.ChakhLeViewModel
 fun HomeScreen(
     viewModel: ChakhLeViewModel,
     onNavigateToCart: () -> Unit,
-    onNavigateToKitchen: () -> Unit,
     onNavigateToTracking: (String) -> Unit,
+    onNavigateToKitchenDetail: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val currentAddress by viewModel.currentAddressTitle.collectAsState()
@@ -116,6 +116,7 @@ fun HomeScreen(
     val isTopRatedOnly by viewModel.isTopRatedOnly.collectAsState()
     val dishes by viewModel.filteredDishes.collectAsState()
     val restaurants by viewModel.restaurants.collectAsState()
+    val promoCoupons by viewModel.promoCouponsFlow.collectAsState()
 
     var showAddressSheet by remember { mutableStateOf(false) }
     var showNotificationsDialog by remember { mutableStateOf(false) }
@@ -135,8 +136,7 @@ fun HomeScreen(
                 cartTotal = cartTotal,
                 onAddressClick = { showAddressSheet = true },
                 onNotificationClick = { showNotificationsDialog = true },
-                onCartClick = onNavigateToCart,
-                onKitchenToggleClick = onNavigateToKitchen
+                onCartClick = onNavigateToCart
             )
 
             // Scrollable Content
@@ -173,43 +173,31 @@ fun HomeScreen(
                         contentPadding = PaddingValues(horizontal = 16.dp),
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        item {
+                        items(promoCoupons.size) { index ->
+                            val coupon = promoCoupons[index]
+                            val badgeText = when {
+                                coupon.isExpired -> "EXPIRED"
+                                coupon.maxUses != null && coupon.getTimeRemainingString() != null ->
+                                    "🔥 ONLY ${coupon.remainingUses} LEFT • ⏱ ${coupon.getTimeRemainingString()}"
+                                coupon.maxUses != null ->
+                                    "🔥 FIRST ${coupon.maxUses} USERS • ONLY ${coupon.remainingUses} LEFT"
+                                coupon.getTimeRemainingString() != null ->
+                                    "⏱ FLASH OFFER • ${coupon.getTimeRemainingString()}"
+                                else -> "FLAT ${coupon.discountPercent}% OFF"
+                            }
+
                             PromoHeroBanner(
-                                title = "50% OFF on your first 3 orders",
-                                subtitle = "Delicious meals delivered under 25 mins!",
-                                code = "CHAKHLE50",
-                                bannerType = 0,
+                                title = coupon.title,
+                                subtitle = coupon.description,
+                                code = coupon.code,
+                                bannerType = index,
+                                badge = badgeText,
+                                isExpired = coupon.isExpired,
                                 onApplyCode = {
                                     viewModel.applyCoupon(it)
                                     onNavigateToCart()
                                 },
-                                modifier = Modifier.width(300.dp)
-                            )
-                        }
-                        item {
-                            PromoHeroBanner(
-                                title = "Free Delivery on Biryani Feasts",
-                                subtitle = "Authentic Dum handis with complimentary raita",
-                                code = "FREEDEL",
-                                bannerType = 1,
-                                onApplyCode = {
-                                    viewModel.applyCoupon(it)
-                                    onNavigateToCart()
-                                },
-                                modifier = Modifier.width(300.dp)
-                            )
-                        }
-                        item {
-                            PromoHeroBanner(
-                                title = "Save Flat ₹100 on Family Orders",
-                                subtitle = "Grand Thalis & Gourmet Pizzas",
-                                code = "FEAST100",
-                                bannerType = 2,
-                                onApplyCode = {
-                                    viewModel.applyCoupon(it)
-                                    onNavigateToCart()
-                                },
-                                modifier = Modifier.width(300.dp)
+                                modifier = Modifier.width(310.dp)
                             )
                         }
                     }
@@ -284,6 +272,12 @@ fun HomeScreen(
                                     letterSpacing = 0.75.sp,
                                     color = ChakhLeSlate900
                                 )
+                                Text(
+                                    text = "Tap to view menu & location",
+                                    fontSize = 11.sp,
+                                    color = ChakhLeRedPrimary,
+                                    fontWeight = FontWeight.SemiBold
+                                )
                             }
 
                             Spacer(modifier = Modifier.height(10.dp))
@@ -294,7 +288,10 @@ fun HomeScreen(
                                 horizontalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
                                 items(restaurants) { rest ->
-                                    RestaurantSpotlightCard(restaurant = rest)
+                                    RestaurantSpotlightCard(
+                                        restaurant = rest,
+                                        onClick = { onNavigateToKitchenDetail(rest.id) }
+                                    )
                                 }
                             }
                         }
@@ -559,11 +556,14 @@ fun CategoryCarouselItem(
 @Composable
 fun RestaurantSpotlightCard(
     restaurant: Restaurant,
+    onClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Card(
         modifier = modifier
-            .width(220.dp),
+            .width(220.dp)
+            .clickable { onClick() }
+            .testTag("restaurant_card_${restaurant.id}"),
         shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(containerColor = ChakhLeSurface),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
@@ -579,6 +579,16 @@ fun RestaurantSpotlightCard(
                         )
                     )
             ) {
+                // Restaurant Culinary Watermark Icon
+                Icon(
+                    imageVector = Icons.Default.Restaurant,
+                    contentDescription = null,
+                    tint = Color.White.copy(alpha = 0.25f),
+                    modifier = Modifier
+                        .size(48.dp)
+                        .align(Alignment.Center)
+                )
+
                 // Badge
                 if (restaurant.featuredTag != null) {
                     Box(
@@ -634,6 +644,17 @@ fun RestaurantSpotlightCard(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
+
+                if (restaurant.address.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = "📍 ${restaurant.address}",
+                        fontSize = 10.sp,
+                        color = ChakhLeTextMuted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
 
                 Spacer(modifier = Modifier.height(6.dp))
 

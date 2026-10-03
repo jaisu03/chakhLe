@@ -475,7 +475,7 @@ fun CartScreen(
                                             customCouponInput = it.uppercase()
                                             couponError = null
                                         },
-                                        placeholder = { Text("e.g. CHAKHLE50", fontSize = 12.sp) },
+                                        placeholder = { Text("e.g. FIRST20, KHAIBU50", fontSize = 12.sp) },
                                         modifier = Modifier
                                             .weight(1f)
                                             .testTag("coupon_input_field"),
@@ -495,12 +495,14 @@ fun CartScreen(
 
                                     Button(
                                         onClick = {
-                                            val success = viewModel.applyCoupon(customCouponInput)
-                                            if (success) {
-                                                customCouponInput = ""
-                                                couponError = null
-                                            } else {
-                                                couponError = "Invalid code. Try CHAKHLE50"
+                                            if (customCouponInput.isNotBlank()) {
+                                                val (success, msg) = viewModel.applyCouponDetailed(customCouponInput, subtotal)
+                                                if (success) {
+                                                    customCouponInput = ""
+                                                    couponError = null
+                                                } else {
+                                                    couponError = msg
+                                                }
                                             }
                                         },
                                         shape = RoundedCornerShape(10.dp),
@@ -516,32 +518,84 @@ fun CartScreen(
                                         text = couponError!!,
                                         color = ChakhLeRedPrimary,
                                         fontSize = 11.sp,
+                                        fontWeight = FontWeight.Medium,
                                         modifier = Modifier.padding(top = 4.dp)
                                     )
                                 }
 
-                                Spacer(modifier = Modifier.height(8.dp))
+                                Spacer(modifier = Modifier.height(10.dp))
 
-                                // Quick coupons chips
-                                Row(
+                                Text(
+                                    text = "AVAILABLE OFFERS & PROMOS",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = ChakhLeTextMuted,
+                                    letterSpacing = 0.5.sp
+                                )
+
+                                Spacer(modifier = Modifier.height(6.dp))
+
+                                // Quick coupons chips with scarcity badges
+                                androidx.compose.foundation.lazy.LazyRow(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
-                                    viewModel.availableCoupons.forEach { coupon ->
+                                    items(viewModel.availableCoupons.size) { idx ->
+                                        val coupon = viewModel.availableCoupons[idx]
+                                        val isExpired = coupon.isExpired
+
                                         Surface(
                                             modifier = Modifier
-                                                .clip(RoundedCornerShape(6.dp))
-                                                .border(1.dp, ChakhLeAmberDark, RoundedCornerShape(6.dp))
-                                                .clickable { viewModel.applyCoupon(coupon.code) },
-                                            color = ChakhLeAmberLight
+                                                .clip(RoundedCornerShape(8.dp))
+                                                .border(
+                                                    1.dp,
+                                                    if (isExpired) Color.LightGray else ChakhLeAmberDark,
+                                                    RoundedCornerShape(8.dp)
+                                                )
+                                                .clickable {
+                                                    val (success, msg) = viewModel.applyCouponDetailed(coupon.code, subtotal)
+                                                    if (!success) {
+                                                        couponError = msg
+                                                    } else {
+                                                        couponError = null
+                                                    }
+                                                },
+                                            color = if (isExpired) Color(0xFFF3F4F6) else ChakhLeAmberLight
                                         ) {
-                                            Text(
-                                                text = "${coupon.code} (${coupon.discountPercent}%)",
-                                                color = ChakhLeAmberDark,
-                                                fontSize = 11.sp,
-                                                fontWeight = FontWeight.Bold,
-                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                            )
+                                            Row(
+                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Column {
+                                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                                        Text(
+                                                            text = coupon.code,
+                                                            color = if (isExpired) Color.Gray else ChakhLeAmberDark,
+                                                            fontSize = 11.sp,
+                                                            fontWeight = FontWeight.Black
+                                                        )
+                                                        Spacer(modifier = Modifier.width(4.dp))
+                                                        Text(
+                                                            text = "(${coupon.discountPercent}% OFF)",
+                                                            color = if (isExpired) Color.Gray else ChakhLeSuccess,
+                                                            fontSize = 10.sp,
+                                                            fontWeight = FontWeight.Bold
+                                                        )
+                                                    }
+                                                    val statusText = when {
+                                                        isExpired -> "EXPIRED"
+                                                        coupon.maxUses != null -> "Only ${coupon.remainingUses} left"
+                                                        coupon.getTimeRemainingString() != null -> coupon.getTimeRemainingString()!!
+                                                        else -> "Min ₹${coupon.minOrder.toInt()}"
+                                                    }
+                                                    Text(
+                                                        text = statusText,
+                                                        fontSize = 9.sp,
+                                                        fontWeight = if (coupon.maxUses != null && !isExpired) FontWeight.Bold else FontWeight.Normal,
+                                                        color = if (coupon.maxUses != null && !isExpired) ChakhLeRedPrimary else ChakhLeTextSecondary
+                                                    )
+                                                }
+                                            }
                                         }
                                     }
                                 }

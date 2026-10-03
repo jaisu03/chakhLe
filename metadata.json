@@ -1,5 +1,5 @@
 {
-  "name": "ChakhLe",
+  "name": "Khaibu",
   "description": "Production-ready multi-vendor food delivery application with live order tracking, smart cart, restaurant kitchen portal, and address management.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]

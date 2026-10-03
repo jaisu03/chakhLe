@@ -22,6 +22,9 @@ interface OrderDao {
     @Query("UPDATE orders SET status = :status WHERE orderId = :orderId")
     suspend fun updateOrderStatus(orderId: String, status: OrderStatus)
 
+    @Query("UPDATE orders SET riderName = :riderName, riderPhone = :riderPhone WHERE orderId = :orderId")
+    suspend fun updateOrderRider(orderId: String, riderName: String, riderPhone: String)
+
     @Query("SELECT * FROM orders WHERE status != 'DELIVERED' AND status != 'CANCELLED' ORDER BY timestamp DESC LIMIT 1")
     fun getLatestActiveOrder(): Flow<OrderEntity?>
 

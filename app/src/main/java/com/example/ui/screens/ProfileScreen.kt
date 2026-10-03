@@ -19,8 +19,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ChevronRight
@@ -31,12 +33,17 @@ import androidx.compose.material.icons.filled.HeadsetMic
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.ReceiptLong
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Restaurant
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.Work
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -68,6 +75,9 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -76,6 +86,7 @@ import com.example.data.model.ChatMessage
 import com.example.data.model.FaqItem
 import com.example.data.model.OrderEntity
 import com.example.data.model.OrderStatus
+import com.example.data.model.UserRole
 import com.example.ui.components.AddressSelectionBottomSheet
 import com.example.ui.theme.ChakhLeAmber
 import com.example.ui.theme.ChakhLeAmberDark
@@ -103,18 +114,31 @@ fun ProfileScreen(
     onNavigateBack: () -> Unit,
     onTrackOrder: (String) -> Unit,
     onNavigateToCart: () -> Unit,
+    onNavigateToKitchen: () -> Unit = {},
+    onNavigateToAdmin: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val phoneNumber by viewModel.phoneNumber.collectAsState()
+    val userName by viewModel.userName.collectAsState()
+    val userEmail by viewModel.userEmail.collectAsState()
+    val firebaseUid by viewModel.firebaseUid.collectAsState()
     val savedAddresses by viewModel.savedAddresses.collectAsState()
     val allOrders by viewModel.allOrders.collectAsState()
     val chatMessages by viewModel.chatMessages.collectAsState()
     val faqs = viewModel.supportFaqs
 
+    val userRole by viewModel.userRole.collectAsState()
+    val currentKitchenId by viewModel.currentKitchenId.collectAsState()
+    val restaurants by viewModel.restaurants.collectAsState()
+    val currentKitchen = remember(restaurants, currentKitchenId) {
+        restaurants.find { it.id == currentKitchenId } ?: restaurants.firstOrNull()
+    }
+
     var selectedTab by remember { mutableIntStateOf(0) }
     val tabTitles = listOf("Order History", "Saved Addresses", "Support & FAQs")
 
     var showAddressSheet by remember { mutableStateOf(false) }
+    var showStaffLoginDialog by remember { mutableStateOf(false) }
     var chatInputText by remember { mutableStateOf("") }
 
     Column(
@@ -177,8 +201,13 @@ fun ProfileScreen(
                         ),
                     contentAlignment = Alignment.Center
                 ) {
+                    val initials = userName.split(" ")
+                        .mapNotNull { it.firstOrNull()?.toString() }
+                        .take(2)
+                        .joinToString("")
+                        .ifBlank { "CL" }
                     Text(
-                        text = "AS",
+                        text = initials,
                         fontWeight = FontWeight.ExtraBold,
                         fontSize = 20.sp,
                         color = Color.White
@@ -190,19 +219,19 @@ fun ProfileScreen(
                 Column(modifier = Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            text = "Aman Sharma",
+                            text = userName.ifBlank { "Valued Foodie" },
                             fontWeight = FontWeight.Bold,
                             fontSize = 17.sp,
                             color = ChakhLeTextPrimary
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Surface(
-                            color = ChakhLeAmberLight,
+                            color = if (firebaseUid != null) Color(0xFFFFF7ED) else ChakhLeAmberLight,
                             shape = RoundedCornerShape(4.dp)
                         ) {
                             Text(
-                                text = "VIP Foodie",
-                                color = ChakhLeAmberDark,
+                                text = if (firebaseUid != null) "🔥 Firebase User" else "VIP Foodie",
+                                color = if (firebaseUid != null) Color(0xFFC2410C) else ChakhLeAmberDark,
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold,
                                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
@@ -212,8 +241,17 @@ fun ProfileScreen(
 
                     Spacer(modifier = Modifier.height(2.dp))
 
+                    if (userEmail.isNotBlank()) {
+                        Text(
+                            text = userEmail,
+                            fontSize = 12.sp,
+                            color = ChakhLeTextSecondary
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                    }
+
                     Text(
-                        text = phoneNumber.ifBlank { "+91 98765 12345" },
+                        text = phoneNumber.ifBlank { if (userEmail.isNotBlank()) "Email Verified Account" else "+91 98765 12345" },
                         fontSize = 13.sp,
                         color = ChakhLeTextSecondary
                     )
@@ -459,7 +497,7 @@ fun ProfileScreen(
 
                                     Column {
                                         Text(
-                                            text = "ChakhLe Live Foodie Support",
+                                            text = "Khaibu Live Foodie Support",
                                             fontWeight = FontWeight.Bold,
                                             fontSize = 14.sp,
                                             color = ChakhLeTextPrimary
@@ -573,6 +611,217 @@ fun ProfileScreen(
                     items(faqs) { faq ->
                         FaqAccordionItem(faq = faq)
                     }
+
+                    // Staff & Administration Portals
+                    item {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "STAFF & PARTNER ACCESS",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = ChakhLeTextMuted,
+                            letterSpacing = 0.5.sp
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        if (userRole == UserRole.CUSTOMER) {
+                            // Public Foodie view - Staff can authenticate
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { showStaffLoginDialog = true },
+                                shape = RoundedCornerShape(14.dp),
+                                colors = CardDefaults.cardColors(containerColor = ChakhLeSurface),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF93C5FD))
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(14.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(38.dp)
+                                                .clip(CircleShape)
+                                                .background(Color(0xFFEFF6FF)),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Lock,
+                                                contentDescription = "Staff Login",
+                                                tint = Color(0xFF2563EB),
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                        }
+                                        Spacer(modifier = Modifier.width(12.dp))
+                                        Column {
+                                            Text(
+                                                text = "Staff & Partner Login",
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 13.sp,
+                                                color = ChakhLeTextPrimary
+                                            )
+                                            Text(
+                                                text = "Sign in to identify as Kitchen Staff or Admin",
+                                                fontSize = 11.sp,
+                                                color = ChakhLeTextSecondary
+                                            )
+                                        }
+                                    }
+                                    Button(
+                                        onClick = { showStaffLoginDialog = true },
+                                        shape = RoundedCornerShape(8.dp),
+                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2563EB)),
+                                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                        modifier = Modifier.height(32.dp)
+                                    ) {
+                                        Text("Sign In", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+                        } else if (userRole == UserRole.KITCHEN) {
+                            // Active Kitchen Session
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(14.dp),
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFFFFFBEB)),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, ChakhLeAmberDark)
+                            ) {
+                                Column(modifier = Modifier.padding(14.dp)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text(text = "👨‍🍳", fontSize = 18.sp)
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Column {
+                                                Text(
+                                                    text = "Identified as Kitchen Staff",
+                                                    fontWeight = FontWeight.Bold,
+                                                    fontSize = 13.sp,
+                                                    color = ChakhLeAmberDark
+                                                )
+                                                Text(
+                                                    text = currentKitchen?.name ?: "Kitchen Outlet",
+                                                    fontSize = 11.sp,
+                                                    color = ChakhLeTextSecondary
+                                                )
+                                            }
+                                        }
+                                        Surface(
+                                            color = ChakhLeAmberDark,
+                                            shape = RoundedCornerShape(4.dp)
+                                        ) {
+                                            Text(
+                                                text = "KITCHEN ACTIVE",
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color.White,
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                            )
+                                        }
+                                    }
+
+                                    Spacer(modifier = Modifier.height(10.dp))
+
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Button(
+                                            onClick = onNavigateToKitchen,
+                                            shape = RoundedCornerShape(8.dp),
+                                            colors = ButtonDefaults.buttonColors(containerColor = ChakhLeAmberDark),
+                                            modifier = Modifier.weight(1f).height(36.dp)
+                                        ) {
+                                            Text("Open Kitchen Orders", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                        OutlinedButton(
+                                            onClick = { viewModel.loginAsCustomer() },
+                                            shape = RoundedCornerShape(8.dp),
+                                            modifier = Modifier.weight(1f).height(36.dp)
+                                        ) {
+                                            Text("Return to Foodie", fontSize = 11.sp)
+                                        }
+                                    }
+                                }
+                            }
+                        } else if (userRole == UserRole.ADMIN) {
+                            // Active Admin Session
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(14.dp),
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFFEFF6FF)),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF2563EB))
+                            ) {
+                                Column(modifier = Modifier.padding(14.dp)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text(text = "🛡️", fontSize = 18.sp)
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Column {
+                                                Text(
+                                                    text = "Identified as Super Admin",
+                                                    fontWeight = FontWeight.Bold,
+                                                    fontSize = 13.sp,
+                                                    color = Color(0xFF2563EB)
+                                                )
+                                                Text(
+                                                    text = "Master Controls Active",
+                                                    fontSize = 11.sp,
+                                                    color = ChakhLeTextSecondary
+                                                )
+                                            }
+                                        }
+                                        Surface(
+                                            color = Color(0xFF2563EB),
+                                            shape = RoundedCornerShape(4.dp)
+                                        ) {
+                                            Text(
+                                                text = "ADMIN ACTIVE",
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color.White,
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                            )
+                                        }
+                                    }
+
+                                    Spacer(modifier = Modifier.height(10.dp))
+
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Button(
+                                            onClick = onNavigateToAdmin,
+                                            shape = RoundedCornerShape(8.dp),
+                                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2563EB)),
+                                            modifier = Modifier.weight(1f).height(36.dp)
+                                        ) {
+                                            Text("Open Admin Console", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                        OutlinedButton(
+                                            onClick = { viewModel.loginAsCustomer() },
+                                            shape = RoundedCornerShape(8.dp),
+                                            modifier = Modifier.weight(1f).height(36.dp)
+                                        ) {
+                                            Text("Return to Foodie", fontSize = 11.sp)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -585,6 +834,17 @@ fun ProfileScreen(
                 onAddNewAddress = { viewModel.addNewAddress(it) },
                 onAutoDetectLocation = { viewModel.autoDetectGpsLocation() },
                 onDismiss = { showAddressSheet = false }
+            )
+        }
+
+        if (showStaffLoginDialog) {
+            StaffLoginDialog(
+                onDismiss = { showStaffLoginDialog = false },
+                onLoginSuccess = { role ->
+                    if (role == UserRole.KITCHEN) onNavigateToKitchen()
+                    else if (role == UserRole.ADMIN) onNavigateToAdmin()
+                },
+                viewModel = viewModel
             )
         }
     }
@@ -744,4 +1004,173 @@ fun FaqAccordionItem(
             }
         }
     }
+}
+
+/**
+ * Staff & Partner Login Dialog for Profile Screen
+ */
+@Composable
+fun StaffLoginDialog(
+    onDismiss: () -> Unit,
+    onLoginSuccess: (UserRole) -> Unit,
+    viewModel: ChakhLeViewModel
+) {
+    var userId by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var isPasswordVisible by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Lock, contentDescription = null, tint = Color(0xFF2563EB))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Staff & Partner Sign In", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = "Cloud kitchen owners and platform administrators: sign in using your assigned credentials.",
+                    fontSize = 12.sp,
+                    color = ChakhLeTextSecondary
+                )
+
+                Surface(
+                    color = Color(0xFFFEF3C7),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = "🔒 Kitchen accounts are generated only by Super Admin. Hotel owners receive login details from Admin.",
+                        fontSize = 10.sp,
+                        color = Color(0xFF78350F),
+                        modifier = Modifier.padding(8.dp)
+                    )
+                }
+
+                if (errorMessage != null) {
+                    Surface(
+                        color = Color(0xFFFDE8E8),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = errorMessage ?: "",
+                            fontSize = 11.sp,
+                            color = Color(0xFF9B1C1C),
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.padding(8.dp)
+                        )
+                    }
+                }
+
+                OutlinedTextField(
+                    value = userId,
+                    onValueChange = {
+                        userId = it
+                        errorMessage = null
+                    },
+                    label = { Text("Staff User ID *") },
+                    placeholder = { Text("e.g. behrouz_kitchen or admin") },
+                    leadingIcon = { Icon(Icons.Default.Person, contentDescription = null, tint = ChakhLeTextMuted) },
+                    singleLine = true,
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = {
+                        password = it
+                        errorMessage = null
+                    },
+                    label = { Text("Staff Password *") },
+                    leadingIcon = { Icon(Icons.Default.Lock, contentDescription = null, tint = ChakhLeTextMuted) },
+                    trailingIcon = {
+                        IconButton(onClick = { isPasswordVisible = !isPasswordVisible }) {
+                            Icon(
+                                imageVector = if (isPasswordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                contentDescription = "Toggle password visibility",
+                                tint = ChakhLeTextMuted
+                            )
+                        }
+                    },
+                    visualTransformation = if (isPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    singleLine = true,
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                // Testing credential quick fills
+                Surface(
+                    color = Color(0xFFF1F5F9),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                userId = "admin"
+                                password = "admin"
+                            },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(6.dp),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp, vertical = 2.dp)
+                        ) {
+                            Text("🛡️ Admin Fill", fontSize = 10.sp)
+                        }
+
+                        OutlinedButton(
+                            onClick = {
+                                userId = "behrouz_kitchen"
+                                password = "Royal@123"
+                            },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(6.dp),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp, vertical = 2.dp)
+                        ) {
+                            Text("👨‍🍳 Kitchen Fill", fontSize = 10.sp)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    val success = viewModel.loginWithStaffCredentials(userId, password)
+                    if (success) {
+                        onDismiss()
+                        onLoginSuccess(viewModel.userRole.value)
+                    } else {
+                        errorMessage = "Invalid credentials. Hotel owners must obtain login credentials from Super Admin."
+                    }
+                },
+                enabled = userId.isNotBlank() && password.isNotBlank(),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2563EB)),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Text("Identify & Sign In", fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            OutlinedButton(
+                onClick = onDismiss,
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Text("Cancel")
+            }
+        }
+    )
 }

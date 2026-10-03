@@ -146,7 +146,7 @@ fun SplashScreen(
                 ) {
                     Icon(
                         imageVector = Icons.Default.Restaurant,
-                        contentDescription = "ChakhLe Logo",
+                        contentDescription = "Khaibu Logo",
                         tint = ChakhLeRedPrimary,
                         modifier = Modifier.size(56.dp)
                     )
@@ -157,7 +157,7 @@ fun SplashScreen(
 
             // App Name
             Text(
-                text = "ChakhLe",
+                text = "Khaibu",
                 fontSize = 42.sp,
                 fontWeight = FontWeight.Black,
                 color = Color.White,

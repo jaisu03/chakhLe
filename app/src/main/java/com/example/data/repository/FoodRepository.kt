@@ -1,6 +1,6 @@
 package com.example.data.repository
 
-import com.example.data.firebase.FirebaseManager
+import android.content.Context
 import com.example.data.local.AddressDao
 import com.example.data.local.CartDao
 import com.example.data.local.OrderDao
@@ -17,12 +17,14 @@ import com.example.data.model.PromoCoupon
 import com.example.data.model.Restaurant
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.firstOrNull
+import org.json.JSONArray
+import org.json.JSONObject
 
 class FoodRepository(
     private val cartDao: CartDao,
     private val orderDao: OrderDao,
     private val addressDao: AddressDao,
-    val firebaseManager: FirebaseManager? = null
+    private val context: Context? = null
 ) {
     val allCartItems: Flow<List<CartItemEntity>> = cartDao.getAllCartItems()
     val allOrders: Flow<List<OrderEntity>> = orderDao.getAllOrders()
@@ -73,18 +75,18 @@ class FoodRepository(
     suspend fun placeOrder(order: OrderEntity) {
         orderDao.insertOrder(order)
         cartDao.clearCart()
-        // Cloud sync to Firestore
-        if (firebaseManager?.isAvailable() == true) {
-            firebaseManager.saveOrderToFirestore(order)
-        }
     }
 
     suspend fun updateOrderStatus(orderId: String, status: OrderStatus) {
         orderDao.updateOrderStatus(orderId, status)
-        // Cloud sync to Firestore
-        if (firebaseManager?.isAvailable() == true) {
-            firebaseManager.updateOrderStatusInFirestore(orderId, status)
-        }
+    }
+
+    suspend fun updateOrderRider(orderId: String, riderName: String, riderPhone: String) {
+        orderDao.updateOrderRider(orderId, riderName, riderPhone)
+    }
+
+    suspend fun deleteOrder(orderId: String) {
+        orderDao.deleteOrder(orderId)
     }
 
     suspend fun addAddress(address: AddressEntity) {
@@ -165,22 +167,171 @@ class FoodRepository(
         }
     }
 
-    // Custom Dynamic Catalogs
+    // Custom Dynamic Catalogs with 100% Free Zero-Cost Local Persistence
+    private val prefs = context?.getSharedPreferences("chakhle_free_store", Context.MODE_PRIVATE)
     private val _customRestaurants = kotlinx.coroutines.flow.MutableStateFlow<List<Restaurant>>(emptyList())
     private val _customDishes = kotlinx.coroutines.flow.MutableStateFlow<List<Dish>>(emptyList())
 
-    suspend fun addRestaurant(restaurant: Restaurant) {
-        _customRestaurants.value = listOf(restaurant) + _customRestaurants.value
-        if (firebaseManager?.isAvailable() == true) {
-            firebaseManager.saveRestaurantToFirestore(restaurant)
+    init {
+        loadPersistedData()
+    }
+
+    private fun loadPersistedData() {
+        if (prefs == null) return
+        try {
+            val restJson = prefs.getString("custom_restaurants", null)
+            if (!restJson.isNullOrBlank()) {
+                val array = JSONArray(restJson)
+                val list = mutableListOf<Restaurant>()
+                for (i in 0 until array.length()) {
+                    val obj = array.getJSONObject(i)
+                    list.add(
+                        Restaurant(
+                            id = obj.getString("id"),
+                            name = obj.getString("name"),
+                            cuisine = obj.getString("cuisine"),
+                            rating = obj.optDouble("rating", 4.5),
+                            reviewCount = obj.optString("reviewCount", "1.2k+"),
+                            deliveryTimeMinutes = obj.optInt("deliveryTimeMinutes", 25),
+                            priceForTwo = obj.optInt("priceForTwo", 350),
+                            offerText = obj.optString("offerText", "20% OFF"),
+                            distanceKm = obj.optDouble("distanceKm", 2.0),
+                            isPureVeg = obj.optBoolean("isPureVeg", false),
+                            address = obj.optString("address", ""),
+                            featuredTag = if (obj.has("featuredTag") && !obj.isNull("featuredTag")) obj.getString("featuredTag") else null,
+                            isOpen = obj.optBoolean("isOpen", true),
+                            ownerPhone = obj.optString("ownerPhone", ""),
+                            ownerName = obj.optString("ownerName", ""),
+                            userId = obj.optString("userId", ""),
+                            password = obj.optString("password", "")
+                        )
+                    )
+                }
+                _customRestaurants.value = list
+            }
+
+            val dishJson = prefs.getString("custom_dishes", null)
+            if (!dishJson.isNullOrBlank()) {
+                val array = JSONArray(dishJson)
+                val list = mutableListOf<Dish>()
+                for (i in 0 until array.length()) {
+                    val obj = array.getJSONObject(i)
+                    val catName = obj.optString("category", "ALL")
+                    val cat = try { FoodCategoryType.valueOf(catName) } catch (e: Exception) { FoodCategoryType.ALL }
+                    list.add(
+                        Dish(
+                            id = obj.getString("id"),
+                            restaurantId = obj.getString("restaurantId"),
+                            restaurantName = obj.getString("restaurantName"),
+                            name = obj.getString("name"),
+                            description = obj.optString("description", ""),
+                            price = obj.getDouble("price"),
+                            originalPrice = if (obj.has("originalPrice") && !obj.isNull("originalPrice")) obj.getDouble("originalPrice") else null,
+                            isVeg = obj.optBoolean("isVeg", false),
+                            rating = obj.optDouble("rating", 4.5),
+                            ratingCount = obj.optInt("ratingCount", 50),
+                            category = cat,
+                            prepTimeMinutes = obj.optInt("prepTimeMinutes", 20),
+                            isBestseller = obj.optBoolean("isBestseller", false),
+                            spicyLevel = obj.optInt("spicyLevel", 1),
+                            portionSize = obj.optString("portionSize", "Serves 1-2")
+                        )
+                    )
+                }
+                _customDishes.value = list
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
     }
 
-    suspend fun addDish(dish: Dish) {
-        _customDishes.value = listOf(dish) + _customDishes.value
-        if (firebaseManager?.isAvailable() == true) {
-            firebaseManager.saveDishToFirestore(dish)
+    private fun persistCustomRestaurants(restaurants: List<Restaurant>) {
+        if (prefs == null) return
+        try {
+            val array = JSONArray()
+            for (r in restaurants) {
+                val obj = JSONObject().apply {
+                    put("id", r.id)
+                    put("name", r.name)
+                    put("cuisine", r.cuisine)
+                    put("rating", r.rating)
+                    put("reviewCount", r.reviewCount)
+                    put("deliveryTimeMinutes", r.deliveryTimeMinutes)
+                    put("priceForTwo", r.priceForTwo)
+                    put("offerText", r.offerText)
+                    put("distanceKm", r.distanceKm)
+                    put("isPureVeg", r.isPureVeg)
+                    put("address", r.address)
+                    put("featuredTag", r.featuredTag ?: "")
+                    put("isOpen", r.isOpen)
+                    put("ownerPhone", r.ownerPhone)
+                    put("ownerName", r.ownerName)
+                    put("userId", r.userId)
+                    put("password", r.password)
+                }
+                array.put(obj)
+            }
+            prefs.edit().putString("custom_restaurants", array.toString()).apply()
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
+    }
+
+    private fun persistCustomDishes(dishes: List<Dish>) {
+        if (prefs == null) return
+        try {
+            val array = JSONArray()
+            for (d in dishes) {
+                val obj = JSONObject().apply {
+                    put("id", d.id)
+                    put("restaurantId", d.restaurantId)
+                    put("restaurantName", d.restaurantName)
+                    put("name", d.name)
+                    put("description", d.description)
+                    put("price", d.price)
+                    if (d.originalPrice != null) put("originalPrice", d.originalPrice)
+                    put("isVeg", d.isVeg)
+                    put("rating", d.rating)
+                    put("ratingCount", d.ratingCount)
+                    put("category", d.category.name)
+                    put("prepTimeMinutes", d.prepTimeMinutes)
+                    put("isBestseller", d.isBestseller)
+                    put("spicyLevel", d.spicyLevel)
+                    put("portionSize", d.portionSize)
+                }
+                array.put(obj)
+            }
+            prefs.edit().putString("custom_dishes", array.toString()).apply()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    suspend fun addRestaurant(restaurant: Restaurant) {
+        val updated = listOf(restaurant) + _customRestaurants.value
+        _customRestaurants.value = updated
+        persistCustomRestaurants(updated)
+    }
+
+    suspend fun addDish(dish: Dish) {
+        val updated = listOf(dish) + _customDishes.value
+        _customDishes.value = updated
+        persistCustomDishes(updated)
+    }
+
+    suspend fun deleteDish(dishId: String) {
+        val updated = _customDishes.value.filter { it.id != dishId }
+        _customDishes.value = updated
+        persistCustomDishes(updated)
+    }
+
+    suspend fun deleteRestaurant(restaurantId: String) {
+        val updatedRest = _customRestaurants.value.filter { it.id != restaurantId }
+        val updatedDishes = _customDishes.value.filter { it.restaurantId != restaurantId }
+        _customRestaurants.value = updatedRest
+        _customDishes.value = updatedDishes
+        persistCustomRestaurants(updatedRest)
+        persistCustomDishes(updatedDishes)
     }
 
     // Categories Catalog
@@ -203,11 +354,15 @@ class FoodRepository(
             reviewCount = "4.2k+",
             deliveryTimeMinutes = 25,
             priceForTwo = 450,
-            offerText = "50% OFF up to ₹100 • Use CHAKHLE50",
+            offerText = "50% OFF up to ₹100 • Use KHAIBU50",
             distanceKm = 1.8,
             isPureVeg = false,
             address = "80 Feet Rd, Koramangala 4th Block",
-            featuredTag = "Must Try"
+            featuredTag = "Must Try",
+            ownerName = "Naveen Khan",
+            ownerPhone = "+91 98765 11001",
+            userId = "behrouz_kitchen",
+            password = "Royal@123"
         ),
         Restaurant(
             id = "rest_2",
@@ -221,7 +376,11 @@ class FoodRepository(
             distanceKm = 2.4,
             isPureVeg = false,
             address = "Near Sony Signal, 100 Ft Road",
-            featuredTag = "Top Rated"
+            featuredTag = "Top Rated",
+            ownerName = "Harpreet Singh",
+            ownerPhone = "+91 98765 11002",
+            userId = "punjab_grill",
+            password = "Grill@123"
         ),
         Restaurant(
             id = "rest_3",
@@ -235,7 +394,11 @@ class FoodRepository(
             distanceKm = 1.2,
             isPureVeg = false,
             address = "5th Block, KHB Colony, Koramangala",
-            featuredTag = "Super Fast"
+            featuredTag = "Super Fast",
+            ownerName = "Marco Rossi",
+            ownerPhone = "+91 98765 11003",
+            userId = "crust_co",
+            password = "Pizza@123"
         ),
         Restaurant(
             id = "rest_4",
@@ -249,7 +412,11 @@ class FoodRepository(
             distanceKm = 1.5,
             isPureVeg = true,
             address = "Commercial Complex, 1st Block",
-            featuredTag = "Pure Veg"
+            featuredTag = "Pure Veg",
+            ownerName = "Ramesh Agarwal",
+            ownerPhone = "+91 98765 11004",
+            userId = "haldiram",
+            password = "Sweet@123"
         ),
         Restaurant(
             id = "rest_5",
@@ -263,7 +430,11 @@ class FoodRepository(
             distanceKm = 2.1,
             isPureVeg = true,
             address = "Food Street, 6th Block",
-            featuredTag = "Street Special"
+            featuredTag = "Street Special",
+            ownerName = "Santosh Patil",
+            ownerPhone = "+91 98765 11005",
+            userId = "mumbai_tadka",
+            password = "Chaat@123"
         ),
         Restaurant(
             id = "rest_6",
@@ -277,7 +448,11 @@ class FoodRepository(
             distanceKm = 0.9,
             isPureVeg = true,
             address = "Near Oasis Mall, Koramangala",
-            featuredTag = "Bestseller"
+            featuredTag = "Bestseller",
+            ownerName = "Vikas Sharma",
+            ownerPhone = "+91 98765 11006",
+            userId = "chai_shai",
+            password = "Chai@123"
         )
     )
 
@@ -532,7 +707,29 @@ class FoodRepository(
     // Promo Coupons
     fun getPromoCoupons(): List<PromoCoupon> = listOf(
         PromoCoupon(
-            code = "CHAKHLE50",
+            code = "FIRST20",
+            discountPercent = 40,
+            maxDiscount = 120.0,
+            minOrder = 199.0,
+            title = "First 20 Users Special: 40% OFF",
+            description = "Exclusive limited offer! Only first 20 foodies can claim.",
+            maxUses = 20,
+            usedCount = 7, // 7 already claimed, 13 left
+            expiryTimestamp = System.currentTimeMillis() + (24 * 3600 * 1000L) // 24 hours validity
+        ),
+        PromoCoupon(
+            code = "FLASH2HR",
+            discountPercent = 60,
+            maxDiscount = 100.0,
+            minOrder = 149.0,
+            title = "Flash Deal: 60% OFF",
+            description = "Super fast meal offer! Valid for next 2 hours only.",
+            maxUses = 30,
+            usedCount = 14,
+            expiryTimestamp = System.currentTimeMillis() + (2 * 3600 * 1000L) // 2 hours validity
+        ),
+        PromoCoupon(
+            code = "KHAIBU50",
             discountPercent = 50,
             maxDiscount = 150.0,
             minOrder = 249.0,
@@ -567,7 +764,7 @@ class FoodRepository(
         FaqItem(
             "faq_2",
             "What payment options are supported?",
-            "ChakhLe supports all major UPI apps (Google Pay, PhonePe, Paytm, BHIM), Cash on Delivery (COD), and Credit/Debit Cards with 100% bank-grade encryption."
+            "Khaibu supports all major UPI apps (Google Pay, PhonePe, Paytm, BHIM), Cash on Delivery (COD), and Credit/Debit Cards with 100% bank-grade encryption."
         ),
         FaqItem(
             "faq_3",
@@ -585,8 +782,8 @@ class FoodRepository(
     fun getInitialNotifications(): List<NotificationItem> = listOf(
         NotificationItem(
             id = "notif_1",
-            title = "🎉 Welcome to ChakhLe!",
-            message = "Enjoy 50% OFF on your first 3 orders using coupon code CHAKHLE50.",
+            title = "🎉 Welcome to Khaibu!",
+            message = "Enjoy 50% OFF on your first 3 orders using coupon code KHAIBU50.",
             time = "Just now"
         ),
         NotificationItem(

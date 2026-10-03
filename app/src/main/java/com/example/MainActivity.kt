@@ -49,9 +49,12 @@ import androidx.compose.foundation.border
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.data.model.OrderStatus
+import com.example.data.model.UserRole
+import com.example.ui.screens.AdminDashboardScreen
 import com.example.ui.screens.AuthScreen
 import com.example.ui.screens.CartScreen
 import com.example.ui.screens.HomeScreen
+import com.example.ui.screens.KitchenDetailScreen
 import com.example.ui.screens.KitchenPortalScreen
 import com.example.ui.screens.OrderTrackingScreen
 import com.example.ui.screens.ProfileScreen
@@ -80,6 +83,8 @@ enum class AppDestination(val route: String, val title: String) {
     CART("cart", "Cart"),
     TRACKING("tracking", "Tracking"),
     KITCHEN("kitchen", "Kitchen"),
+    KITCHEN_DETAIL("kitchen_detail", "Kitchen Details"),
+    ADMIN("admin", "Admin"),
     PROFILE("profile", "Account")
 }
 
@@ -101,9 +106,32 @@ fun ChakhLeApp(viewModel: ChakhLeViewModel = viewModel()) {
     val isLoggedIn by viewModel.isLoggedIn.collectAsState()
     val cartItems by viewModel.cartItems.collectAsState()
     val latestActiveOrder by viewModel.latestActiveOrder.collectAsState()
+    val userRole by viewModel.userRole.collectAsState()
 
     var currentScreen by remember { mutableStateOf(AppDestination.HOME) }
     var trackingOrderId by remember { mutableStateOf<String?>(null) }
+    var selectedKitchenId by remember { mutableStateOf<String>("rest_1") }
+
+    // Sync screen destination when role changes
+    androidx.compose.runtime.LaunchedEffect(userRole) {
+        when (userRole) {
+            UserRole.KITCHEN -> {
+                if (currentScreen != AppDestination.KITCHEN) {
+                    currentScreen = AppDestination.KITCHEN
+                }
+            }
+            UserRole.ADMIN -> {
+                if (currentScreen != AppDestination.ADMIN) {
+                    currentScreen = AppDestination.ADMIN
+                }
+            }
+            UserRole.CUSTOMER -> {
+                if (currentScreen == AppDestination.KITCHEN || currentScreen == AppDestination.ADMIN) {
+                    currentScreen = AppDestination.HOME
+                }
+            }
+        }
+    }
 
     val totalCartItems = cartItems.sumOf { it.quantity }
     val hasActiveOrder = latestActiveOrder != null && latestActiveOrder?.status != OrderStatus.DELIVERED && latestActiveOrder?.status != OrderStatus.CANCELLED
@@ -121,7 +149,10 @@ fun ChakhLeApp(viewModel: ChakhLeViewModel = viewModel()) {
             modifier = Modifier.fillMaxSize(),
             bottomBar = {
                 AnimatedVisibility(
-                    visible = currentScreen != AppDestination.SPLASH && currentScreen != AppDestination.AUTH,
+                    visible = currentScreen != AppDestination.SPLASH && 
+                              currentScreen != AppDestination.AUTH && 
+                              currentScreen != AppDestination.KITCHEN && 
+                              currentScreen != AppDestination.ADMIN,
                     enter = slideInVertically(initialOffsetY = { it }),
                     exit = slideOutVertically(targetOffsetY = { it })
                 ) {
@@ -248,35 +279,7 @@ fun ChakhLeApp(viewModel: ChakhLeViewModel = viewModel()) {
                                 modifier = Modifier.testTag("nav_tracking")
                             )
 
-                            // 4. Kitchen Portal
-                            NavigationBarItem(
-                                selected = currentScreen == AppDestination.KITCHEN,
-                                onClick = { currentScreen = AppDestination.KITCHEN },
-                                icon = {
-                                    Icon(
-                                        imageVector = if (currentScreen == AppDestination.KITCHEN) Icons.Filled.Restaurant else Icons.Outlined.Restaurant,
-                                        contentDescription = "Kitchen"
-                                    )
-                                },
-                                label = {
-                                    Text(
-                                        text = "KITCHEN",
-                                        fontWeight = if (currentScreen == AppDestination.KITCHEN) FontWeight.Black else FontWeight.Bold,
-                                        fontSize = 10.sp,
-                                        letterSpacing = 0.5.sp
-                                    )
-                                },
-                                colors = NavigationBarItemDefaults.colors(
-                                    selectedIconColor = ChakhLeAmberDark,
-                                    selectedTextColor = ChakhLeAmberDark,
-                                    indicatorColor = Color(0xFFFEF3C7),
-                                    unselectedIconColor = ChakhLeSlate400,
-                                    unselectedTextColor = ChakhLeSlate400
-                                ),
-                                modifier = Modifier.testTag("nav_kitchen")
-                            )
-
-                            // 5. Profile & Order History
+                            // 4. Profile & Order History
                             NavigationBarItem(
                                 selected = currentScreen == AppDestination.PROFILE,
                                 onClick = { currentScreen = AppDestination.PROFILE },
@@ -323,11 +326,22 @@ fun ChakhLeApp(viewModel: ChakhLeViewModel = viewModel()) {
                             HomeScreen(
                                 viewModel = viewModel,
                                 onNavigateToCart = { currentScreen = AppDestination.CART },
-                                onNavigateToKitchen = { currentScreen = AppDestination.KITCHEN },
                                 onNavigateToTracking = { orderId ->
                                     trackingOrderId = orderId
                                     currentScreen = AppDestination.TRACKING
+                                },
+                                onNavigateToKitchenDetail = { kitchenId ->
+                                    selectedKitchenId = kitchenId
+                                    currentScreen = AppDestination.KITCHEN_DETAIL
                                 }
+                            )
+                        }
+                        AppDestination.KITCHEN_DETAIL -> {
+                            KitchenDetailScreen(
+                                kitchenId = selectedKitchenId,
+                                viewModel = viewModel,
+                                onNavigateBack = { currentScreen = AppDestination.HOME },
+                                onNavigateToCart = { currentScreen = AppDestination.CART }
                             )
                         }
                         AppDestination.CART -> {
@@ -344,17 +358,36 @@ fun ChakhLeApp(viewModel: ChakhLeViewModel = viewModel()) {
                             OrderTrackingScreen(
                                 viewModel = viewModel,
                                 orderIdParam = trackingOrderId,
-                                onNavigateHome = { currentScreen = AppDestination.HOME },
-                                onNavigateToKitchen = { currentScreen = AppDestination.KITCHEN }
+                                onNavigateHome = { currentScreen = AppDestination.HOME }
                             )
                         }
                         AppDestination.KITCHEN -> {
                             KitchenPortalScreen(
                                 viewModel = viewModel,
-                                onNavigateBack = { currentScreen = AppDestination.HOME },
+                                onNavigateBack = {
+                                    viewModel.loginAsCustomer()
+                                    currentScreen = AppDestination.HOME
+                                },
                                 onTrackOrder = { orderId ->
                                     trackingOrderId = orderId
                                     currentScreen = AppDestination.TRACKING
+                                },
+                                onNavigateToAdmin = {
+                                    viewModel.loginAsAdmin()
+                                    currentScreen = AppDestination.ADMIN
+                                }
+                            )
+                        }
+                        AppDestination.ADMIN -> {
+                            AdminDashboardScreen(
+                                viewModel = viewModel,
+                                onNavigateToCustomer = {
+                                    viewModel.loginAsCustomer()
+                                    currentScreen = AppDestination.HOME
+                                },
+                                onNavigateToKitchen = { kitchenId ->
+                                    viewModel.selectKitchen(kitchenId)
+                                    currentScreen = AppDestination.KITCHEN
                                 }
                             )
                         }
@@ -366,7 +399,15 @@ fun ChakhLeApp(viewModel: ChakhLeViewModel = viewModel()) {
                                     trackingOrderId = orderId
                                     currentScreen = AppDestination.TRACKING
                                 },
-                                onNavigateToCart = { currentScreen = AppDestination.CART }
+                                onNavigateToCart = { currentScreen = AppDestination.CART },
+                                onNavigateToKitchen = {
+                                    viewModel.setUserRole(UserRole.KITCHEN)
+                                    currentScreen = AppDestination.KITCHEN
+                                },
+                                onNavigateToAdmin = {
+                                    viewModel.loginAsAdmin()
+                                    currentScreen = AppDestination.ADMIN
+                                }
                             )
                         }
                         else -> {}

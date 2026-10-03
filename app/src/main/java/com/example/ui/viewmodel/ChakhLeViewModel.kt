@@ -5,7 +5,15 @@ import android.app.Application
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.data.firebase.FirebaseManager
+import com.example.data.auth.FirebaseAuthResult
+import com.example.data.auth.FirebaseAuthService
+import com.example.data.auth.OtpResult
+import com.example.data.auth.RealOtpManager
+import com.example.data.auth.SmsGatewayType
+import com.example.data.auth.VerifyResult
+import com.example.data.firestore.FirestoreOrderService
+import com.example.data.firestore.FirestoreOrderUpdate
+import com.example.data.firestore.FirestoreSyncState
 import com.example.data.local.ChakhLeDatabase
 import com.example.data.model.AddressEntity
 import com.example.data.model.CartItemEntity
@@ -20,8 +28,8 @@ import com.example.data.model.OrderStatus
 import com.example.data.model.PaymentMethod
 import com.example.data.model.PromoCoupon
 import com.example.data.model.Restaurant
+import com.example.data.model.UserRole
 import com.example.data.repository.FoodRepository
-import com.google.firebase.auth.PhoneAuthProvider
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -29,6 +37,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -37,16 +46,26 @@ import java.util.Locale
 
 class ChakhLeViewModel(application: Application) : AndroidViewModel(application) {
 
-    val firebaseManager = FirebaseManager.getInstance(application)
     private val database = ChakhLeDatabase.getInstance(application)
     private val repository = FoodRepository(
         database.cartDao(),
         database.orderDao(),
         database.addressDao(),
-        firebaseManager
+        application
     )
 
     // Splash / Auth State
+    val realOtpManager = RealOtpManager.getInstance(application)
+    val firebaseAuthService = FirebaseAuthService.getInstance()
+    val firestoreOrderService = FirestoreOrderService.getInstance()
+
+    // Real-Time Firestore Order State
+    private val _firestoreOrderUpdate = MutableStateFlow<FirestoreOrderUpdate?>(null)
+    val firestoreOrderUpdate: StateFlow<FirestoreOrderUpdate?> = _firestoreOrderUpdate.asStateFlow()
+
+    private var activeFirestoreListenerJob: Job? = null
+    private var liveSimulationJob: Job? = null
+
     private val _isSplashFinished = MutableStateFlow(false)
     val isSplashFinished: StateFlow<Boolean> = _isSplashFinished.asStateFlow()
 
@@ -55,6 +74,21 @@ class ChakhLeViewModel(application: Application) : AndroidViewModel(application)
 
     private val _phoneNumber = MutableStateFlow("")
     val phoneNumber: StateFlow<String> = _phoneNumber.asStateFlow()
+
+    private val _emailInput = MutableStateFlow("")
+    val emailInput: StateFlow<String> = _emailInput.asStateFlow()
+
+    private val _emailPassword = MutableStateFlow("")
+    val emailPassword: StateFlow<String> = _emailPassword.asStateFlow()
+
+    private val _isEmailAuthMode = MutableStateFlow(false)
+    val isEmailAuthMode: StateFlow<Boolean> = _isEmailAuthMode.asStateFlow()
+
+    private val _firebaseUid = MutableStateFlow<String?>(firebaseAuthService.getUserId())
+    val firebaseUid: StateFlow<String?> = _firebaseUid.asStateFlow()
+
+    private val _generatedOtp = MutableStateFlow("")
+    val generatedOtp: StateFlow<String> = _generatedOtp.asStateFlow()
 
     private val _otpCode = MutableStateFlow("")
     val otpCode: StateFlow<String> = _otpCode.asStateFlow()
@@ -68,16 +102,31 @@ class ChakhLeViewModel(application: Application) : AndroidViewModel(application)
     private val _authErrorMessage = MutableStateFlow<String?>(null)
     val authErrorMessage: StateFlow<String?> = _authErrorMessage.asStateFlow()
 
+    private val _otpSuccessMessage = MutableStateFlow<String?>(null)
+    val otpSuccessMessage: StateFlow<String?> = _otpSuccessMessage.asStateFlow()
+
     private val _verificationId = MutableStateFlow<String?>(null)
     val verificationId: StateFlow<String?> = _verificationId.asStateFlow()
 
-    private var resendToken: PhoneAuthProvider.ForceResendingToken? = null
+    val otpResendSeconds: StateFlow<Int> = realOtpManager.resendSeconds
+    val otpValiditySeconds: StateFlow<Int> = realOtpManager.validitySeconds
+    val attemptsRemaining: StateFlow<Int> = realOtpManager.attemptsRemaining
+    val lastDispatchedGateway: StateFlow<String> = realOtpManager.lastDispatchedGateway
+    val carrierSmsNotice: StateFlow<String?> = realOtpManager.carrierSmsNotice
 
-    private val _otpResendSeconds = MutableStateFlow(30)
-    val otpResendSeconds: StateFlow<Int> = _otpResendSeconds.asStateFlow()
-    private var timerJob: Job? = null
+    private val _selectedGateway = MutableStateFlow(realOtpManager.getSelectedGateway())
+    val selectedGateway: StateFlow<SmsGatewayType> = _selectedGateway.asStateFlow()
 
-    // User Profile State
+    // User Profile State & Role-Based Access Control (RBAC)
+    private val _userRole = MutableStateFlow(UserRole.CUSTOMER)
+    val userRole: StateFlow<UserRole> = _userRole.asStateFlow()
+
+    private val _authIdentifiedMessage = MutableStateFlow<String?>(null)
+    val authIdentifiedMessage: StateFlow<String?> = _authIdentifiedMessage.asStateFlow()
+
+    private val _currentKitchenId = MutableStateFlow<String?>("rest_1")
+    val currentKitchenId: StateFlow<String?> = _currentKitchenId.asStateFlow()
+
     private val _userName = MutableStateFlow("Suraj Jaiswar")
     val userName: StateFlow<String> = _userName.asStateFlow()
 
@@ -96,10 +145,16 @@ class ChakhLeViewModel(application: Application) : AndroidViewModel(application)
     private val _restaurants = MutableStateFlow(repository.getRestaurants())
     val restaurants: StateFlow<List<Restaurant>> = _restaurants.asStateFlow()
 
+    val currentKitchen: StateFlow<Restaurant?> = combine(_restaurants, _currentKitchenId) { list, id ->
+        list.find { it.id == id } ?: list.firstOrNull()
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
     private val _allDishes = MutableStateFlow(repository.getAllDishes())
     val allDishes: StateFlow<List<Dish>> = _allDishes.asStateFlow()
 
-    val availableCoupons: List<PromoCoupon> = repository.getPromoCoupons()
+    private val _promoCoupons = MutableStateFlow(repository.getPromoCoupons())
+    val promoCouponsFlow: StateFlow<List<PromoCoupon>> = _promoCoupons.asStateFlow()
+    val availableCoupons: List<PromoCoupon> get() = _promoCoupons.value
     val supportFaqs: List<FaqItem> = repository.getFaqs()
 
     // Filters & Search
@@ -179,46 +234,6 @@ class ChakhLeViewModel(application: Application) : AndroidViewModel(application)
     init {
         viewModelScope.launch {
             repository.initializeSeedDataIfEmpty()
-            if (firebaseManager.isAvailable()) {
-                // Auto seed and configure Firebase collections if empty
-                firebaseManager.autoSetupBackend(
-                    defaultRestaurants = repository.getRestaurants(),
-                    defaultDishes = repository.getAllDishes()
-                )
-
-                // Listen to live Cloud Firestore orders and sync to local database
-                launch {
-                    firebaseManager.observeOrdersRealtime().collect { firestoreOrders ->
-                        if (firestoreOrders.isNotEmpty()) {
-                            for (order in firestoreOrders) {
-                                database.orderDao().insertOrder(order)
-                            }
-                        }
-                    }
-                }
-
-                // Listen to live Cloud Firestore restaurants
-                launch {
-                    firebaseManager.observeRestaurantsRealtime().collect { firestoreRestaurants ->
-                        if (firestoreRestaurants.isNotEmpty()) {
-                            val current = repository.getRestaurants()
-                            val combined = (firestoreRestaurants + current).distinctBy { it.id }
-                            _restaurants.value = combined
-                        }
-                    }
-                }
-
-                // Listen to live Cloud Firestore dishes
-                launch {
-                    firebaseManager.observeDishesRealtime().collect { firestoreDishes ->
-                        if (firestoreDishes.isNotEmpty()) {
-                            val current = repository.getAllDishes()
-                            val combined = (firestoreDishes + current).distinctBy { it.id }
-                            _allDishes.value = combined
-                        }
-                    }
-                }
-            }
         }
     }
 
@@ -227,13 +242,25 @@ class ChakhLeViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun setPhoneNumber(number: String) {
-        _phoneNumber.value = number
+        val digits = number.filter { it.isDigit() }
+        val cleaned = if (digits.startsWith("91") && digits.length > 10) {
+            digits.drop(2).take(10)
+        } else if (digits.startsWith("0") && digits.length > 10) {
+            digits.drop(1).take(10)
+        } else {
+            digits.take(10)
+        }
+        _phoneNumber.value = cleaned
         _authErrorMessage.value = null
     }
 
     fun setOtpCode(code: String) {
         _otpCode.value = code
         _authErrorMessage.value = null
+    }
+
+    fun setOtpSuccessMessage(message: String?) {
+        _otpSuccessMessage.value = message
     }
 
     fun clearAuthError() {
@@ -244,128 +271,306 @@ class ChakhLeViewModel(application: Application) : AndroidViewModel(application)
         _isOtpSent.value = false
         _otpCode.value = ""
         _authErrorMessage.value = null
+        _otpSuccessMessage.value = null
         _authLoading.value = false
         _verificationId.value = null
-        timerJob?.cancel()
     }
 
-    fun sendOtp(activity: Activity? = null, isResend: Boolean = false) {
+    fun setSmsGateway(gateway: SmsGatewayType) {
+        realOtpManager.setSelectedGateway(gateway)
+        _selectedGateway.value = gateway
+    }
+
+    fun saveGatewayApiKey(apiKey: String) {
+        realOtpManager.setGatewayApiKey(apiKey)
+    }
+
+    fun getGatewayApiKey(): String = realOtpManager.getGatewayApiKey()
+
+    fun saveTwilioConfig(sid: String, token: String, fromNumber: String) {
+        realOtpManager.setTwilioDetails(sid, token, fromNumber)
+    }
+
+    fun getTwilioDetails(): Triple<String, String, String> = realOtpManager.getTwilioDetails()
+
+    fun setEmailInput(email: String) {
+        _emailInput.value = email
+    }
+
+    fun setEmailPassword(password: String) {
+        _emailPassword.value = password
+    }
+
+    fun setEmailAuthMode(isEmail: Boolean) {
+        _isEmailAuthMode.value = isEmail
+        _authErrorMessage.value = null
+    }
+
+    fun sendOtp(activity: Activity? = null, isResend: Boolean = false, onOtpGenerated: ((String) -> Unit)? = null) {
+        if (realOtpManager.isEmailSession && isResend) {
+            sendEmailOtp(isResend = true)
+            return
+        }
+
         val rawDigits = _phoneNumber.value.trim().filter { it.isDigit() }
-        if (rawDigits.length < 10) {
+        val tenDigits = if (rawDigits.startsWith("91") && rawDigits.length == 12) {
+            rawDigits.drop(2)
+        } else {
+            rawDigits.takeLast(10)
+        }
+        if (tenDigits.length < 10) {
             _authErrorMessage.value = "Please enter a valid 10-digit mobile number"
             return
         }
 
-        val formattedPhone = if (rawDigits.startsWith("91") && rawDigits.length == 12) {
-            "+$rawDigits"
-        } else {
-            "+91${rawDigits.takeLast(10)}"
+        // Keep clean 10 digits in _phoneNumber so it remains editable, deletable, and valid
+        _phoneNumber.value = tenDigits
+        val formattedPhone = "+91$tenDigits"
+
+        _authLoading.value = true
+        _authErrorMessage.value = null
+        _otpSuccessMessage.value = null
+        _otpCode.value = "" // Clear input so user has to enter the real received OTP
+
+        viewModelScope.launch {
+            val result = realOtpManager.generateAndSendOtp(
+                phoneNumber = formattedPhone,
+                activity = activity,
+                onFirebaseCodeSent = { vId ->
+                    _verificationId.value = vId
+                },
+                onFirebaseAutoVerified = { fbUser ->
+                    _isLoggedIn.value = true
+                    _userRole.value = UserRole.CUSTOMER
+                    _phoneNumber.value = formattedPhone
+                    _firebaseUid.value = fbUser.uid
+                    _userName.value = fbUser.displayName ?: "Valued Foodie"
+                    _isOtpSent.value = false
+                    _authLoading.value = false
+                }
+            )
+            _authLoading.value = false
+            when (result) {
+                is OtpResult.Sent -> {
+                    _isOtpSent.value = true
+                    _otpSuccessMessage.value = result.message
+                    val activeOtp = realOtpManager.getCurrentOtp()
+                    _generatedOtp.value = activeOtp
+                    _authErrorMessage.value = null
+                    onOtpGenerated?.invoke(activeOtp)
+                }
+                is OtpResult.Error -> {
+                    _authErrorMessage.value = result.message
+                }
+            }
+        }
+    }
+
+    fun sendEmailOtp(isResend: Boolean = false) {
+        val cleanEmail = _emailInput.value.trim().lowercase()
+        if (!android.util.Patterns.EMAIL_ADDRESS.matcher(cleanEmail).matches()) {
+            _authErrorMessage.value = "Please enter a valid email address (e.g. name@example.com)"
+            return
         }
 
         _authLoading.value = true
         _authErrorMessage.value = null
+        _otpSuccessMessage.value = null
+        _otpCode.value = ""
 
-        if (activity != null && firebaseManager.isAvailable()) {
-            firebaseManager.sendPhoneVerificationCode(
-                activity = activity,
-                formattedPhoneNumber = formattedPhone,
-                forceResendingToken = if (isResend) resendToken else null,
-                onVerificationCompleted = { credential ->
-                    _authLoading.value = false
-                    _isOtpSent.value = true
-                    if (credential.smsCode != null) {
-                        _otpCode.value = credential.smsCode!!
-                    }
-                    viewModelScope.launch {
-                        val result = firebaseManager.signInWithPhoneCredential(credential)
-                        if (result.isSuccess) {
-                            _isLoggedIn.value = true
-                        }
-                    }
-                },
-                onVerificationFailed = { error ->
-                    _authLoading.value = false
-                    Log.w("ChakhLeViewModel", "Firebase Phone Verification Failed: ${error.message}")
-                    val rawMsg = error.message ?: ""
-                    val msg = if (rawMsg.contains("This operation is not allowed") || rawMsg.contains("sign-in provider is disabled") || rawMsg.contains("ERROR_OPERATION_NOT_ALLOWED")) {
-                        "Phone Auth is disabled in Firebase Console. Enable 'Phone' under Authentication -> Sign-in method."
-                    } else if (rawMsg.contains("SMS unable to be sent until this region enabled")) {
-                        "SMS Region (+91) not enabled. Enable India (+91) in Firebase Console -> Authentication -> Settings."
-                    } else if (rawMsg.contains("BILLING_NOT_ENABLED") || rawMsg.contains("CONFIGURATION_NOT_FOUND") || rawMsg.contains("quota", ignoreCase = true) || rawMsg.contains("SMS quota", ignoreCase = true)) {
-                        "Daily SMS quota reached. You can also use code 123456 or Guest Mode."
-                    } else if (rawMsg.contains("TOO_LONG") || rawMsg.contains("TOO_SHORT") || rawMsg.contains("invalid phone number", ignoreCase = true)) {
-                        "Please enter a valid 10-digit mobile number."
-                    } else {
-                        error.localizedMessage ?: "SMS verification could not be completed."
-                    }
-                    _authErrorMessage.value = msg
-                    _isOtpSent.value = true
-                    _otpCode.value = ""
-                    startOtpTimer()
-                },
-                onCodeSent = { verificationId, token ->
-                    _authLoading.value = false
-                    _verificationId.value = verificationId
-                    resendToken = token
-                    _isOtpSent.value = true
-                    _otpCode.value = ""
-                    _authErrorMessage.value = null
-                    startOtpTimer()
-                }
-            )
-        } else {
+        viewModelScope.launch {
+            val result = realOtpManager.generateAndSendEmailOtp(cleanEmail)
             _authLoading.value = false
-            _isOtpSent.value = true
-            _otpCode.value = ""
-            startOtpTimer()
+            when (result) {
+                is OtpResult.Sent -> {
+                    _isOtpSent.value = true
+                    _otpSuccessMessage.value = result.message
+                    val activeOtp = realOtpManager.getCurrentOtp()
+                    _generatedOtp.value = activeOtp
+                    _authErrorMessage.value = null
+                }
+                is OtpResult.Error -> {
+                    _authErrorMessage.value = result.message
+                }
+            }
         }
     }
 
-    private fun startOtpTimer() {
-        timerJob?.cancel()
-        _otpResendSeconds.value = 30
-        timerJob = viewModelScope.launch {
-            while (_otpResendSeconds.value > 0) {
-                delay(1000)
-                _otpResendSeconds.value -= 1
+    fun registerWithFirebaseEmailPassword(name: String = "") {
+        val email = _emailInput.value.trim().lowercase()
+        val pass = _emailPassword.value
+        if (!android.util.Patterns.EMAIL_ADDRESS.matcher(email).matches()) {
+            _authErrorMessage.value = "Please enter a valid email address"
+            return
+        }
+        if (pass.length < 6) {
+            _authErrorMessage.value = "Password must be at least 6 characters"
+            return
+        }
+
+        _authLoading.value = true
+        _authErrorMessage.value = null
+        viewModelScope.launch {
+            when (val result = firebaseAuthService.signUpWithEmail(email, pass)) {
+                is FirebaseAuthResult.Success -> {
+                    _authLoading.value = false
+                    _userEmail.value = email
+                    _firebaseUid.value = result.data.uid
+                    if (name.isNotBlank()) _userName.value = name
+                    _isLoggedIn.value = true
+                    _userRole.value = UserRole.CUSTOMER
+                    _authErrorMessage.value = null
+                    _authIdentifiedMessage.value = "Welcome! Account created via Firebase (${result.data.email})"
+                }
+                is FirebaseAuthResult.Error -> {
+                    _authLoading.value = false
+                    _authErrorMessage.value = result.message
+                }
+            }
+        }
+    }
+
+    fun signInWithFirebaseEmailPassword() {
+        val email = _emailInput.value.trim().lowercase()
+        val pass = _emailPassword.value
+        if (!android.util.Patterns.EMAIL_ADDRESS.matcher(email).matches()) {
+            _authErrorMessage.value = "Please enter a valid email address"
+            return
+        }
+        if (pass.isBlank()) {
+            _authErrorMessage.value = "Please enter your password"
+            return
+        }
+
+        _authLoading.value = true
+        _authErrorMessage.value = null
+        viewModelScope.launch {
+            when (val result = firebaseAuthService.signInWithEmail(email, pass)) {
+                is FirebaseAuthResult.Success -> {
+                    _authLoading.value = false
+                    _userEmail.value = email
+                    _firebaseUid.value = result.data.uid
+                    _isLoggedIn.value = true
+                    _userRole.value = UserRole.CUSTOMER
+                    _authErrorMessage.value = null
+                    _authIdentifiedMessage.value = "Welcome back! Signed in via Firebase (${result.data.email})"
+                }
+                is FirebaseAuthResult.Error -> {
+                    _authLoading.value = false
+                    _authErrorMessage.value = result.message
+                }
+            }
+        }
+    }
+
+    fun sendFirebasePasswordReset() {
+        val email = _emailInput.value.trim().lowercase()
+        if (!android.util.Patterns.EMAIL_ADDRESS.matcher(email).matches()) {
+            _authErrorMessage.value = "Please enter your email to receive password reset link"
+            return
+        }
+        _authLoading.value = true
+        _authErrorMessage.value = null
+        viewModelScope.launch {
+            when (val result = firebaseAuthService.sendPasswordReset(email)) {
+                is FirebaseAuthResult.Success -> {
+                    _authLoading.value = false
+                    _otpSuccessMessage.value = "Password reset email sent to $email. Please check your inbox."
+                }
+                is FirebaseAuthResult.Error -> {
+                    _authLoading.value = false
+                    _authErrorMessage.value = result.message
+                }
             }
         }
     }
 
     fun verifyOtpAndLogin() {
         val code = _otpCode.value.trim()
-        if (code.length < 4) {
-            _authErrorMessage.value = "Please enter the 6-digit OTP code received via SMS"
+        if (code.length < 6) {
+            _authErrorMessage.value = "Please enter the complete 6-digit OTP code"
             return
         }
 
         _authLoading.value = true
         _authErrorMessage.value = null
 
-        val verId = _verificationId.value
-        if (verId != null && firebaseManager.isAvailable()) {
+        val vId = _verificationId.value
+        if (!vId.isNullOrBlank() && !realOtpManager.isEmailSession) {
+            // Verify via Firebase Phone Auth with fallback to local OTP
             viewModelScope.launch {
-                val result = firebaseManager.verifyAndSignInWithPhoneCode(verId, code)
-                _authLoading.value = false
-                if (result.isSuccess) {
-                    _isLoggedIn.value = true
-                } else {
-                    if (code == "123456" || code.length == 6) {
+                when (val fbResult = firebaseAuthService.verifyPhoneOtpCode(vId, code)) {
+                    is FirebaseAuthResult.Success -> {
+                        _authLoading.value = false
                         _isLoggedIn.value = true
-                        firebaseManager.signInAnonymously()
-                    } else {
-                        val errorMsg = result.exceptionOrNull()?.localizedMessage ?: "Invalid verification code. Please check SMS and try again."
-                        _authErrorMessage.value = errorMsg
+                        _userRole.value = UserRole.CUSTOMER
+                        _firebaseUid.value = fbResult.data.uid
+                        _authErrorMessage.value = null
+                        _otpSuccessMessage.value = null
+                        _verificationId.value = null
+                        return@launch
+                    }
+                    is FirebaseAuthResult.Error -> {
+                        // Check if local OTP matches as safety fallback
+                        when (val localResult = realOtpManager.verifyOtp(code)) {
+                            is VerifyResult.Success -> {
+                                _authLoading.value = false
+                                _isLoggedIn.value = true
+                                _userRole.value = UserRole.CUSTOMER
+                                _authErrorMessage.value = null
+                                _otpSuccessMessage.value = null
+                                _verificationId.value = null
+                            }
+                            else -> {
+                                _authLoading.value = false
+                                _authErrorMessage.value = fbResult.message
+                            }
+                        }
                     }
                 }
             }
-        } else {
-            _authLoading.value = false
-            _isLoggedIn.value = true
-            viewModelScope.launch {
-                if (firebaseManager.isAvailable()) {
-                    firebaseManager.signInAnonymously()
+            return
+        }
+
+        when (val result = realOtpManager.verifyOtp(code)) {
+            is VerifyResult.Success -> {
+                _authLoading.value = false
+                _isLoggedIn.value = true
+                _userRole.value = UserRole.CUSTOMER
+                _authErrorMessage.value = null
+                _otpSuccessMessage.value = null
+
+                if (realOtpManager.isEmailSession) {
+                    val verifiedEmail = realOtpManager.getTargetRecipient() ?: _emailInput.value.trim()
+                    if (verifiedEmail.isNotBlank()) {
+                        _userEmail.value = verifiedEmail
+                    }
                 }
+
+                // Sync session with Firebase Auth in background
+                viewModelScope.launch {
+                    val email = _userEmail.value.ifBlank { realOtpManager.getTargetRecipient() ?: "" }
+                    if (email.contains("@")) {
+                        val fbUser = firebaseAuthService.ensureSessionForVerifiedEmail(email)
+                        _firebaseUid.value = fbUser?.uid
+                    }
+                }
+            }
+            is VerifyResult.InvalidCode -> {
+                _authLoading.value = false
+                _authErrorMessage.value = result.message
+            }
+            is VerifyResult.Expired -> {
+                _authLoading.value = false
+                _authErrorMessage.value = result.message
+            }
+            is VerifyResult.MaxAttemptsReached -> {
+                _authLoading.value = false
+                _authErrorMessage.value = result.message
+            }
+            is VerifyResult.NoSession -> {
+                _authLoading.value = false
+                _authErrorMessage.value = result.message
             }
         }
     }
@@ -380,32 +585,124 @@ class ChakhLeViewModel(application: Application) : AndroidViewModel(application)
         if (_phoneNumber.value.isBlank()) {
             _phoneNumber.value = "+91 98765 12345"
         }
+        _userRole.value = UserRole.CUSTOMER
         _isLoggedIn.value = true
-        viewModelScope.launch {
-            if (firebaseManager.isAvailable()) {
-                firebaseManager.signInAnonymously()
-            }
-        }
     }
 
     fun skipLoginForDemo() {
         continueAsGuest()
     }
 
-    // Dynamic Kitchen & Menu Management (Admin / Partner Role)
-    fun registerKitchen(
+    // Role Identification & Access Control
+    fun loginWithStaffCredentials(userIdInput: String, passwordInput: String): Boolean {
+        val cleanUser = userIdInput.trim()
+        val cleanPass = passwordInput.trim()
+
+        if (cleanUser.isBlank() || cleanPass.isBlank()) {
+            _authErrorMessage.value = "Please enter both User ID and Password."
+            return false
+        }
+
+        // 1. Super Admin Check
+        val isAdminUser = (cleanUser.equals("admin", ignoreCase = true) ||
+                cleanUser.equals("superadmin", ignoreCase = true) ||
+                cleanUser.equals("admin@khaibu.com", ignoreCase = true) ||
+                cleanUser.equals("admin@chakhle.com", ignoreCase = true))
+        val isAdminPass = (cleanPass == "admin" || cleanPass == "admin123" || cleanPass == "Admin@123" || cleanPass == "Khaibu@2026" || cleanPass == "ChakhLe@2026")
+
+        if (isAdminUser && isAdminPass) {
+            _userRole.value = UserRole.ADMIN
+            _isLoggedIn.value = true
+            _authErrorMessage.value = null
+            _authIdentifiedMessage.value = "Identified as Super Admin. Master Controls enabled."
+            return true
+        }
+
+        // 2. Kitchen Outlet Partner Check (User ID or Registered Owner Phone)
+        val matchedKitchen = _restaurants.value.find { rest ->
+            val matchUser = rest.userId.isNotBlank() && rest.userId.equals(cleanUser, ignoreCase = true)
+            val matchPhone = rest.ownerPhone.isNotBlank() &&
+                    rest.ownerPhone.filter { it.isDigit() }.takeLast(10) == cleanUser.filter { it.isDigit() }.takeLast(10)
+            val matchPass = rest.password == cleanPass
+            (matchUser || matchPhone) && matchPass
+        }
+
+        if (matchedKitchen != null) {
+            _currentKitchenId.value = matchedKitchen.id
+            _userRole.value = UserRole.KITCHEN
+            _isLoggedIn.value = true
+            _authErrorMessage.value = null
+            _authIdentifiedMessage.value = "Identified as Kitchen: ${matchedKitchen.name}. Welcome Chef!"
+            return true
+        }
+
+        _authErrorMessage.value = "Authentication failed. Invalid User ID or Password.\n(Kitchen accounts are created exclusively by Admin. Contact Admin for credentials.)"
+        return false
+    }
+
+    fun clearAuthIdentifiedMessage() {
+        _authIdentifiedMessage.value = null
+    }
+
+    fun setUserRole(role: UserRole, kitchenId: String? = null) {
+        _userRole.value = role
+        if (kitchenId != null) {
+            _currentKitchenId.value = kitchenId
+        } else if (role == UserRole.KITCHEN && _currentKitchenId.value == null) {
+            _currentKitchenId.value = _restaurants.value.firstOrNull()?.id ?: "rest_1"
+        }
+    }
+
+    fun selectKitchen(kitchenId: String) {
+        _currentKitchenId.value = kitchenId
+    }
+
+    fun loginAsKitchen(kitchenId: String) {
+        _currentKitchenId.value = kitchenId
+        _userRole.value = UserRole.KITCHEN
+        _isLoggedIn.value = true
+    }
+
+    fun loginAsAdmin() {
+        _userRole.value = UserRole.ADMIN
+        _isLoggedIn.value = true
+    }
+
+    fun loginAsCustomer() {
+        _userRole.value = UserRole.CUSTOMER
+        _isLoggedIn.value = true
+    }
+
+    fun logout() {
+        _isLoggedIn.value = false
+        _userRole.value = UserRole.CUSTOMER
+        _authIdentifiedMessage.value = null
+        _firebaseUid.value = null
+        firebaseAuthService.signOut()
+    }
+
+    // Dynamic Kitchen & Menu Management (Admin Exclusive: Only Admin can create kitchen logins)
+    fun adminRegisterKitchen(
         name: String,
         cuisine: String,
         deliveryTime: Int,
         isPureVeg: Boolean,
         address: String,
         priceForTwo: Int,
-        signatureDishName: String,
-        dishPrice: Double,
-        dishCategory: FoodCategoryType,
-        dishDescription: String
-    ) {
+        ownerName: String,
+        ownerPhone: String,
+        userId: String = "",
+        password: String = "",
+        signatureDishName: String = "",
+        dishPrice: Double = 199.0,
+        dishCategory: FoodCategoryType = FoodCategoryType.BIRYANI,
+        dishDescription: String = ""
+    ): Restaurant {
         val newRestId = "rest_${System.currentTimeMillis()}"
+        val sanitizedBase = name.lowercase().replace("[^a-zA-Z0-9]".toRegex(), "").take(8)
+        val finalUserId = if (userId.isNotBlank()) userId.trim().lowercase() else "kitchen_${sanitizedBase}"
+        val finalPassword = if (password.isNotBlank()) password.trim() else "CK@${(1000..9999).random()}"
+
         val newRestaurant = Restaurant(
             id = newRestId,
             name = name,
@@ -418,7 +715,12 @@ class ChakhLeViewModel(application: Application) : AndroidViewModel(application)
             distanceKm = 1.2,
             isPureVeg = isPureVeg,
             address = address,
-            featuredTag = "Newly Added"
+            featuredTag = "Newly Added",
+            isOpen = true,
+            ownerPhone = ownerPhone.ifBlank { "+91 98765 00000" },
+            ownerName = ownerName.ifBlank { "Hotel Partner" },
+            userId = finalUserId,
+            password = finalPassword
         )
 
         viewModelScope.launch {
@@ -447,15 +749,178 @@ class ChakhLeViewModel(application: Application) : AndroidViewModel(application)
                 _allDishes.value = repository.getAllDishes()
             }
 
-            // Notify
+            // Platform notification for Admin with credentials to share
             val notif = NotificationItem(
                 id = "notif_${System.currentTimeMillis()}",
-                title = "🏪 New Kitchen Registered!",
-                message = "$name is now LIVE on ChakhLe. Fresh dishes are available for delivery.",
+                title = "🏪 Kitchen Created: $name",
+                message = "Login User ID: $finalUserId • Password: $finalPassword. Ready to share with $ownerName.",
                 time = "Just now"
             )
             _notifications.value = listOf(notif) + _notifications.value
         }
+
+        return newRestaurant
+    }
+
+    fun adminUpdateKitchenCredentials(
+        restaurantId: String,
+        newUserId: String,
+        newPassword: String
+    ) {
+        val current = _restaurants.value
+        _restaurants.value = current.map {
+            if (it.id == restaurantId) {
+                it.copy(
+                    userId = if (newUserId.isNotBlank()) newUserId.trim().lowercase() else it.userId,
+                    password = if (newPassword.isNotBlank()) newPassword.trim() else it.password
+                )
+            } else it
+        }
+    }
+
+    fun registerAndLoginKitchen(
+        name: String,
+        cuisine: String,
+        deliveryTime: Int,
+        isPureVeg: Boolean,
+        address: String,
+        priceForTwo: Int,
+        ownerName: String,
+        ownerPhone: String,
+        signatureDishName: String = "",
+        dishPrice: Double = 199.0,
+        dishCategory: FoodCategoryType = FoodCategoryType.BIRYANI,
+        dishDescription: String = ""
+    ) {
+        val rest = adminRegisterKitchen(
+            name = name,
+            cuisine = cuisine,
+            deliveryTime = deliveryTime,
+            isPureVeg = isPureVeg,
+            address = address,
+            priceForTwo = priceForTwo,
+            ownerName = ownerName,
+            ownerPhone = ownerPhone,
+            userId = "",
+            password = "",
+            signatureDishName = signatureDishName,
+            dishPrice = dishPrice,
+            dishCategory = dishCategory,
+            dishDescription = dishDescription
+        )
+        _currentKitchenId.value = rest.id
+        _userRole.value = UserRole.KITCHEN
+        _isLoggedIn.value = true
+    }
+
+    fun kitchenToggleStoreStatus(restaurantId: String) {
+        val currentList = _restaurants.value
+        _restaurants.value = currentList.map {
+            if (it.id == restaurantId) it.copy(isOpen = !it.isOpen) else it
+        }
+    }
+
+    // Admin Master Controls
+    fun adminAssignRider(orderId: String, riderName: String, riderPhone: String) {
+        viewModelScope.launch {
+            repository.updateOrderRider(orderId, riderName, riderPhone)
+        }
+    }
+
+    fun adminCancelOrder(orderId: String) {
+        viewModelScope.launch {
+            repository.updateOrderStatus(orderId, OrderStatus.CANCELLED)
+        }
+    }
+
+    fun adminDeleteOrder(orderId: String) {
+        viewModelScope.launch {
+            repository.deleteOrder(orderId)
+        }
+    }
+
+    fun adminDeleteDish(dishId: String) {
+        viewModelScope.launch {
+            repository.deleteDish(dishId)
+            _allDishes.value = _allDishes.value.filter { it.id != dishId }
+        }
+    }
+
+    fun adminDeleteRestaurant(restaurantId: String) {
+        viewModelScope.launch {
+            repository.deleteRestaurant(restaurantId)
+            _restaurants.value = _restaurants.value.filter { it.id != restaurantId }
+            _allDishes.value = _allDishes.value.filter { it.restaurantId != restaurantId }
+        }
+    }
+
+    fun adminAddCoupon(
+        code: String,
+        discountPercent: Int,
+        maxDiscount: Double,
+        minOrder: Double,
+        title: String,
+        description: String,
+        maxUses: Int? = null,
+        validityHours: Int? = null
+    ) {
+        val expiryTimestamp = validityHours?.takeIf { it > 0 }?.let {
+            System.currentTimeMillis() + (it * 3600L * 1000L)
+        }
+        val newCoupon = PromoCoupon(
+            code = code.uppercase().trim(),
+            discountPercent = discountPercent,
+            maxDiscount = maxDiscount,
+            minOrder = minOrder,
+            title = title,
+            description = description,
+            maxUses = maxUses?.takeIf { it > 0 },
+            usedCount = 0,
+            expiryTimestamp = expiryTimestamp
+        )
+        _promoCoupons.value = listOf(newCoupon) + _promoCoupons.value.filter { it.code != newCoupon.code }
+    }
+
+    fun adminDeleteCoupon(code: String) {
+        _promoCoupons.value = _promoCoupons.value.filter { it.code != code }
+        if (_appliedCoupon.value?.code == code) {
+            _appliedCoupon.value = null
+        }
+    }
+
+    // Dynamic Kitchen & Menu Management
+    fun registerKitchen(
+        name: String,
+        cuisine: String,
+        deliveryTime: Int,
+        isPureVeg: Boolean,
+        address: String,
+        priceForTwo: Int,
+        signatureDishName: String = "",
+        dishPrice: Double = 199.0,
+        dishCategory: FoodCategoryType = FoodCategoryType.BIRYANI,
+        dishDescription: String = "",
+        ownerName: String = "Hotel Owner",
+        ownerPhone: String = "+91 98765 00000",
+        userId: String = "",
+        password: String = ""
+    ): Restaurant {
+        return adminRegisterKitchen(
+            name = name,
+            cuisine = cuisine,
+            deliveryTime = deliveryTime,
+            isPureVeg = isPureVeg,
+            address = address,
+            priceForTwo = priceForTwo,
+            ownerName = ownerName,
+            ownerPhone = ownerPhone,
+            userId = userId,
+            password = password,
+            signatureDishName = signatureDishName,
+            dishPrice = dishPrice,
+            dishCategory = dishCategory,
+            dishDescription = dishDescription
+        )
     }
 
     fun addDishToKitchen(
@@ -564,14 +1029,29 @@ class ChakhLeViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun applyCoupon(code: String): Boolean {
-        val coupon = availableCoupons.find { it.code.equals(code, ignoreCase = true) }
-        return if (coupon != null) {
-            _appliedCoupon.value = coupon
-            true
-        } else {
-            false
+    fun applyCouponDetailed(code: String, subtotal: Double = calculateSubtotal()): Pair<Boolean, String> {
+        val coupon = availableCoupons.find { it.code.equals(code.trim(), ignoreCase = true) }
+            ?: return Pair(false, "Coupon '$code' not found. Check code & try again.")
+
+        if (coupon.isTimeExpired) {
+            return Pair(false, "Sorry! Offer '${coupon.code}' has expired (Validity period ended).")
         }
+
+        if (coupon.isQuotaExhausted) {
+            return Pair(false, "Sorry! Offer '${coupon.code}' was limited to the first ${coupon.maxUses} people and all claims are taken.")
+        }
+
+        if (subtotal > 0 && subtotal < coupon.minOrder) {
+            val shortage = (coupon.minOrder - subtotal).toInt()
+            return Pair(false, "Add items worth ₹$shortage more to apply '${coupon.code}' (Min order ₹${coupon.minOrder.toInt()}).")
+        }
+
+        _appliedCoupon.value = coupon
+        return Pair(true, "'${coupon.code}' applied successfully! Saved ${coupon.discountPercent}%.")
+    }
+
+    fun applyCoupon(code: String): Boolean {
+        return applyCouponDetailed(code).first
     }
 
     fun removeCoupon() {
@@ -660,6 +1140,10 @@ class ChakhLeViewModel(application: Application) : AndroidViewModel(application)
             repository.placeOrder(newOrder)
             _selectedTrackingOrderId.value = generatedOrderId
 
+            // Sync to Firestore and attach real-time listener
+            firestoreOrderService.syncOrderToFirestore(newOrder)
+            startObservingOrderInFirestore(generatedOrderId)
+
             // Add notification
             val notif = NotificationItem(
                 id = "notif_${System.currentTimeMillis()}",
@@ -670,12 +1154,45 @@ class ChakhLeViewModel(application: Application) : AndroidViewModel(application)
             )
             _notifications.value = listOf(notif) + _notifications.value
 
+            // Increment coupon redemption usage if a coupon was used
+            val appliedCode = _appliedCoupon.value?.code
+            if (!appliedCode.isNullOrBlank()) {
+                _promoCoupons.value = _promoCoupons.value.map { coupon ->
+                    if (coupon.code.equals(appliedCode, ignoreCase = true)) {
+                        coupon.copy(usedCount = coupon.usedCount + 1)
+                    } else coupon
+                }
+            }
+
+            _appliedCoupon.value = null
             onOrderPlaced(generatedOrderId)
         }
     }
 
     fun selectOrderForTracking(orderId: String) {
         _selectedTrackingOrderId.value = orderId
+        startObservingOrderInFirestore(orderId)
+    }
+
+    /**
+     * Connects real-time Firestore Snapshot Listener to orders/{orderId}.
+     * Automatically syncs changes from Firestore into Room and UI state flow.
+     */
+    fun startObservingOrderInFirestore(orderId: String) {
+        activeFirestoreListenerJob?.cancel()
+        activeFirestoreListenerJob = viewModelScope.launch {
+            val localOrder = repository.getOrderById(orderId).firstOrNull()
+            if (localOrder != null) {
+                // Ensure document is seeded in Firestore
+                firestoreOrderService.syncOrderToFirestore(localOrder)
+            }
+            firestoreOrderService.observeOrder(orderId).collect { update ->
+                _firestoreOrderUpdate.value = update
+                if (update.order != null) {
+                    repository.updateOrderStatus(update.order.orderId, update.order.status)
+                }
+            }
+        }
     }
 
     // Step Order to Next Status (For Interactive Live Demo & Kitchen Portal)
@@ -688,15 +1205,59 @@ class ChakhLeViewModel(application: Application) : AndroidViewModel(application)
             OrderStatus.DELIVERED -> OrderStatus.DELIVERED
             OrderStatus.CANCELLED -> OrderStatus.CANCELLED
         }
+        updateOrderStatusDirectly(orderId, nextStatus)
+    }
+
+    fun updateOrderStatusDirectly(orderId: String, status: OrderStatus, customStageNote: String? = null) {
         viewModelScope.launch {
-            repository.updateOrderStatus(orderId, nextStatus)
+            repository.updateOrderStatus(orderId, status)
+            firestoreOrderService.updateOrderStatusInFirestore(orderId, status, customStageNote)
         }
     }
 
-    fun updateOrderStatusDirectly(orderId: String, status: OrderStatus) {
-        viewModelScope.launch {
-            repository.updateOrderStatus(orderId, status)
+    /**
+     * Direct test trigger to progress order in Firestore (triggers real-time snapshot listener)
+     */
+    fun progressOrderInFirestore(orderId: String, status: OrderStatus, customStageNote: String? = null) {
+        updateOrderStatusDirectly(orderId, status, customStageNote)
+    }
+
+    /**
+     * Automated real-time simulation: walks through Preparing -> Out for Delivery -> Delivered
+     * via Firestore updates, firing the Firestore snapshot listener in real time.
+     */
+    fun startLiveAutoProgressionSimulation(orderId: String) {
+        liveSimulationJob?.cancel()
+        liveSimulationJob = viewModelScope.launch {
+            // Stage 1: Move to PREPARING
+            delay(1000)
+            updateOrderStatusDirectly(
+                orderId,
+                OrderStatus.PREPARING,
+                "👨‍🍳 Master Chef is cooking your order with fresh spices & herbs"
+            )
+
+            // Stage 2: Move to OUT_FOR_DELIVERY
+            delay(5000)
+            updateOrderStatusDirectly(
+                orderId,
+                OrderStatus.OUT_FOR_DELIVERY,
+                "🛵 Rider Rajesh Kumar picked up parcel and is speeding to your doorstep"
+            )
+
+            // Stage 3: Move to DELIVERED
+            delay(6000)
+            updateOrderStatusDirectly(
+                orderId,
+                OrderStatus.DELIVERED,
+                "🎉 Delivered hot and fresh! Enjoy your authentic meal"
+            )
         }
+    }
+
+    fun stopLiveAutoProgressionSimulation() {
+        liveSimulationJob?.cancel()
+        liveSimulationJob = null
     }
 
     // Reorder Past Order
@@ -727,9 +1288,9 @@ class ChakhLeViewModel(application: Application) : AndroidViewModel(application)
                 userText.contains("refund", ignoreCase = true) || userText.contains("cancel", ignoreCase = true) ->
                     "If you faced an issue with your meal or delivery, our instant refund system credits the amount back to your UPI/Card account within 10 minutes."
                 userText.contains("coupon", ignoreCase = true) || userText.contains("discount", ignoreCase = true) ->
-                    "Use coupon code CHAKHLE50 for 50% discount on your order!"
+                    "Use coupon code KHAIBU50 for 50% discount on your order!"
                 else ->
-                    "Thank you for contacting ChakhLe support! A food delivery specialist is reviewing your request. We are here 24/7."
+                    "Thank you for contacting Khaibu support! A food delivery specialist is reviewing your request. We are here 24/7."
             }
             val replyMsg = ChatMessage(
                 id = "bot_${System.currentTimeMillis()}",

@@ -479,7 +479,6 @@ fun HomeTopBar(
     onAddressClick: () -> Unit,
     onNotificationClick: () -> Unit,
     onCartClick: () -> Unit,
-    onKitchenToggleClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Surface(
@@ -565,24 +564,6 @@ fun HomeTopBar(
 
                 // Action Buttons with Geometric Balance styling
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    // Kitchen portal shortcut
-                    IconButton(
-                        onClick = onKitchenToggleClick,
-                        modifier = Modifier
-                            .size(38.dp)
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(CategoryBiryaniBg)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Restaurant,
-                            contentDescription = "Kitchen Portal",
-                            tint = ChakhLeAmberDark,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.width(8.dp))
-
                     // Notifications
                     IconButton(
                         onClick = onNotificationClick,
@@ -659,6 +640,8 @@ fun PromoHeroBanner(
     subtitle: String,
     code: String,
     bannerType: Int = 0,
+    badge: String? = null,
+    isExpired: Boolean = false,
     onApplyCode: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -671,7 +654,7 @@ fun PromoHeroBanner(
     Card(
         modifier = modifier
             .fillMaxWidth()
-            .height(148.dp),
+            .height(154.dp),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = Color.Transparent),
         elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
@@ -708,12 +691,30 @@ fun PromoHeroBanner(
                 verticalArrangement = Arrangement.SpaceBetween
             ) {
                 Column {
+                    if (badge != null) {
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = if (isExpired) Color.Black.copy(alpha = 0.5f) else Color.White,
+                            modifier = Modifier.padding(bottom = 4.dp)
+                        ) {
+                            Text(
+                                text = badge,
+                                color = if (isExpired) Color.White else Color(0xFFB91C1C),
+                                fontSize = 9.5.sp,
+                                fontWeight = FontWeight.Black,
+                                letterSpacing = 0.5.sp,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
                     Text(
                         text = title,
                         color = Color.White,
-                        fontSize = 19.sp,
+                        fontSize = 18.sp,
                         fontWeight = FontWeight.Black,
-                        lineHeight = 22.sp
+                        lineHeight = 21.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
@@ -731,17 +732,20 @@ fun PromoHeroBanner(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Button(
-                        onClick = { onApplyCode(code) },
+                        onClick = { if (!isExpired) onApplyCode(code) },
+                        enabled = !isExpired,
                         colors = ButtonDefaults.buttonColors(
                             containerColor = Color.White,
-                            contentColor = ChakhLeRedPrimary
+                            contentColor = ChakhLeRedPrimary,
+                            disabledContainerColor = Color.White.copy(alpha = 0.6f),
+                            disabledContentColor = Color.Gray
                         ),
                         shape = RoundedCornerShape(8.dp),
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 4.dp),
                         modifier = Modifier.height(30.dp)
                     ) {
                         Text(
-                            text = "ORDER NOW",
+                            text = if (isExpired) "EXPIRED" else "CLAIM CODE",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.ExtraBold,
                             letterSpacing = 0.5.sp
